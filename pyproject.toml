@@ -1,0 +1,21 @@
+[project]
+name = "noise-cancel"
+version = "0.1.0"
+description = "Speech denoising: data pipeline, evaluation, and models"
+readme = "README.md"
+authors = [
+    { name = "Morindill", email = "Morindill02@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.5",
+    "soundfile>=0.14.0",
+    "soxr>=1.1.0",
+]
+
+[project.scripts]
+noise-cancel = "noise_cancel.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
