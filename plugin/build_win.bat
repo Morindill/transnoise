@@ -2,7 +2,7 @@
 rem Build the VST3 on Windows (VS 2026 Community bundled CMake 4.x + Ninja). ASCII only: cmd mis-parses UTF-8 in .bat files.
 rem Everything stays inside the project: sources in plugin\, build tree and JUCE checkout in plugin\build\ (git-ignored).
 rem Run it from cmd; pushd maps the \\wsl.localhost UNC path to a temporary drive letter, which cmd/MSVC/Ninja need:
-rem     cmd /c "pushd \\wsl.localhost\Ubuntu\home\morindill\transnoise\plugin && .\build_win.bat"
+rem     cmd /c "pushd \\wsl.localhost\DISTRO\PATH_TO_REPO\plugin && .\build_win.bat"
 rem Output: plugin\build\Transnoise_artefacts\Release\VST3\Transnoise.vst3
 setlocal
 set "VS=C:\Program Files\Microsoft Visual Studio\18\Community"

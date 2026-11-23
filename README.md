@@ -416,4 +416,6 @@ data/                    git-ignored: raw/, staged/, manifests/, index/, checkpo
 | Everything except `plugin/` (C++ core in `cpp/`, training, data pipeline, evaluation, scripts) | MIT, see `LICENSE` |
 | `plugin/` (the VST3 / standalone plugin, built with JUCE) | AGPLv3, see `plugin/LICENSE` |
 
-The plugin links the MIT-licensed core, which is allowed; the combined plugin binary is distributed under the AGPLv3, and so are its sources. Third-party data sources have their own licenses (listed in `src/transnoise/data_pipeline/registry.py`); trained weights inherit the restrictions of the data they were trained on.
+The plugin links the MIT-licensed core, which is allowed; the combined plugin binary is distributed under the AGPLv3, and so are its sources. Third-party data sources have their own licenses (listed in `src/transnoise/data_pipeline/registry.py` and `NOTICE`).
+
+**The trained weights (`cpp/gen/weights.bin`) and any plugin build that embeds them are for non-commercial use only.** They were trained on data that includes CC BY-NC 4.0 sets (EARS, Expresso, WHAM!) and one set with no stated license (the RNNoise noise collection); see `NOTICE`. This restriction applies to the weights and the binaries that embed them, not to the source code.

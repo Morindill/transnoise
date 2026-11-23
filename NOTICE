@@ -1,0 +1,43 @@
+Transnoise third-party notices
+==============================
+
+Trained model weights (cpp/gen/weights.bin, and the plugin builds that embed it)
+-------------------------------------------------------------------------------
+
+The weights were trained on the datasets listed below. Three of them are
+licensed CC BY-NC 4.0 (EARS, Expresso, WHAM!) and one carries no license
+statement (RNNoise noise collection). Until the effect of those terms on the
+trained weights is settled, the weights, and any binary that embeds them, are
+provided for NON-COMMERCIAL use only. The source code is licensed separately
+(see LICENSE and plugin/LICENSE) and is not restricted by this notice.
+
+Training data
+-------------
+
+Speech
+  LibriTTS-R      CC BY 4.0        https://www.openslr.org/141/
+  VCTK            CC BY 4.0        https://datashare.ed.ac.uk/handle/10283/3443
+  AISHELL-1       Apache 2.0       https://www.openslr.org/33/
+  AISHELL-3       Apache 2.0       https://www.openslr.org/93/
+  EARS            CC BY-NC 4.0     https://github.com/facebookresearch/ears_dataset
+  Expresso        CC BY-NC 4.0     https://speechbot.github.io/expresso/
+
+Noise
+  DEMAND          CC BY 4.0        https://zenodo.org/records/1227121
+  DNS Challenge 5 noise (AudioSet CC BY 4.0, Freesound CC0)
+                                   https://github.com/microsoft/DNS-Challenge
+  WHAM! noise     CC BY-NC 4.0     https://wham.whisper.ai/
+  RNNoise noise collection (Xiph.Org)
+                  no license stated  https://media.xiph.org/rnnoise/data/
+
+Room impulse responses
+  Simulated and real RIRs (OpenSLR 28)   Apache 2.0   https://www.openslr.org/28/
+
+Attribution: each dataset above is credited to its authors under its license;
+see the linked pages for the required citations. No dataset audio is
+redistributed in this repository.
+
+Software
+--------
+
+JUCE (https://juce.com) is used under the AGPLv3 by the plugin in plugin/.

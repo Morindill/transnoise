@@ -51,7 +51,7 @@ SOURCES: dict[str, Source] = {s.name: s for s in [
            ("https://datashare.ed.ac.uk/download/DS_10283_3443.zip",), unwrap="VCTK-Corpus-0.92.zip",
            include=r"_mic1\.flac$", speaker=r"/(?P<spk>[ps]\d+)/",  # 110 speakers: p225...p376 and s5
            note="Native 48 kHz, tier A; the download is an 11.7 GB outer archive, from which the inner zip (about 11.7 GB) is extracted"),
-    Source("ears", "speech", "en", "CC BY-NC 4.0 (to be verified)",
+    Source("ears", "speech", "en", "CC BY-NC 4.0",
            tuple(f"https://github.com/facebookresearch/ears_dataset/releases/download/dataset/p{i:03d}.zip"
                  for i in range(1, 108)),
            speaker=r"(?P<spk>p\d{3})/", note="48 kHz expressive speech, tier A"),
@@ -65,7 +65,7 @@ SOURCES: dict[str, Source] = {s.name: s for s in [
            _openslr(93, "data_aishell3.tgz"),
            speaker=r"(?P<spk>SSB\d{4})/", note="44.1 kHz, tier A"),
     # ---- Official RNNoise data ----
-    Source("rnnoise_noise", "noise", "-", "See the Xiph notes (to be verified)",
+    Source("rnnoise_noise", "noise", "-", "No license stated by Xiph",
            (_XIPH + "background_noise_v2.sw", _XIPH + "foreground_noise_v2.sw",
             _XIPH + "contrib_noise.sw"), kind="raw"),
     # ---- Noise ----
