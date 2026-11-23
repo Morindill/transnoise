@@ -1,15 +1,19 @@
+import csv
 import hashlib
+import io
 import json
 import os
 import re
 import shutil
 import threading
+import zipfile
 from collections.abc import Callable, Iterator
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from pathlib import Path
 
 import numpy as np
+import soundfile as sf
 
 from ..paths import MANIFESTS, SR, STAGED
 from .archive import archives_in, iter_files
@@ -20,6 +24,7 @@ from .registry import Source
 
 AUDIO = re.compile(r"\.(wav|flac)$", re.I)
 UPSTREAM = {"train": "train", "dev": "val", "test": "test"}
+META_SPLIT = {"train": "train", "valid": "val", "val": "val", "dev": "val", "test": "test"}  # 包内 CSV 里的切分名（小写）
 SPLIT, RAW_SW, STAGE = CFG["split"], CFG["raw_sw"], CFG["stage"]
 
 
@@ -47,17 +52,45 @@ def _load_done(mf: Path) -> set[str]:
     return ids
 
 
+def _load_meta(src: Source, unit: Path) -> dict[str, tuple[str, str]]:
+    """包内的 CSV → {文件名: (切分, 分组)}。直接读 zip 末尾的目录，不用遍历整个包。"""
+    fcol, scol, gcol = src.meta_cols
+    with zipfile.ZipFile(unit) as z, z.open(src.meta_csv) as f:
+        return {r[fcol]: (META_SPLIT[r[scol].strip().lower()], r[gcol])
+                for r in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8"))}
+
+
+def _segments(src: Source, t: dict, data: bytes, done: set[str]) -> Iterator[dict]:
+    """长录音：在主进程里解码、选声道，切成 long_noise_chunk_sec 秒一段，每段一个任务（worker 不会收到几百 MB 的整文件）。
+    结尾不足半段的尾巴并进最后一段，不产生碎片。段的 id 由 <成员>#<序号> 决定，续跑时已完成的段会跳过。"""
+    with sf.SoundFile(io.BytesIO(data)) as f:
+        n, sr = len(f), f.samplerate
+        step = int(sr * CFG["clean"]["long_noise_chunk_sec"])
+        starts = list(range(0, n, step))
+        if len(starts) > 1 and n - starts[-1] < step // 2:
+            starts.pop()
+        for k, s in enumerate(starts):
+            member = f"{t['member']}#{k}"
+            tid = make_id(src.name, member)
+            if tid in done:
+                continue
+            f.seek(s)
+            x = f.read((n if k == len(starts) - 1 else s + step) - s, dtype="float32", always_2d=True)[:, src.channel]
+            yield t | {"id": tid, "member": member, "audio": np.ascontiguousarray(x), "sr": sr}
+
+
 def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None]) -> Iterator[dict]:
     """遍历一个输入单元（一个压缩包，或一个 .sw 文件），产出待处理任务。on_pos 报告已读字节数。"""
     inc = re.compile(src.include) if src.include else None
     spk_re = re.compile(src.speaker) if src.speaker else None
     split_re = re.compile(src.split) if src.split else None
+    meta = _load_meta(src, unit) if src.meta_csv else {}
 
     def base(member: str, speaker: str | None, split_key: str) -> dict:
         m = split_re.search(member) if split_re else None
         split = UPSTREAM[m.group("split")] if m else hash_split(f"{src.name}:{split_key}")
         return {"id": make_id(src.name, member), "source": src.name, "member": member,
-                "role": src.role, "lang": src.lang, "speaker": speaker, "split": split}
+                "role": src.role, "lang": src.lang, "speaker": speaker, "split": split, "min_bw": src.min_bandwidth_hz}
 
     if src.kind == "raw":
         step = SR * RAW_SW["chunk_sec"]
@@ -79,8 +112,16 @@ def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None
             sm = spk_re.search(member) if spk_re else None
             speaker = sm.group("spk") if sm else None
             t = base(member, speaker, speaker or member)
-            t["data"] = read()
-            yield t
+            if meta:  # 上游给了每个文件的切分和分组（地点）：直接用，缺了就报错，不悄悄退回哈希
+                name = member.rsplit("/", 1)[-1]
+                if name not in meta:
+                    raise SystemExit(f"[{src.name}] {member} 不在 {src.meta_csv} 里，没法确定它的切分")
+                t["split"], t["speaker"] = meta[name]
+            if src.channel is not None:
+                yield from _segments(src, t, read(), done)
+            else:
+                t["data"] = read()
+                yield t
 
 
 def stage(src: Source, workers: int | None = None, limit: int | None = None, redo: bool = False) -> None:

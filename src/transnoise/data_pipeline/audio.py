@@ -42,6 +42,8 @@ def process(task: dict) -> dict:
     role = task["role"]
     if "pcm" in task:
         mono, sr = task["pcm"].astype(np.float32) / 32768.0, SR
+    elif "audio" in task:  # 主进程已经解码并选好声道的片段（长录音切段后送来）
+        mono, sr = task["audio"], task["sr"]
     else:
         x, sr = sf.read(io.BytesIO(task["data"]), dtype="float32", always_2d=True)
         mono = x.mean(1)
@@ -65,6 +67,8 @@ def process(task: dict) -> dict:
         row["bw_tier"] = tier(row["bandwidth_hz"])
         if row["rms_db"] < CLEAN["min_rms_db"][role]:
             row["drop_reason"] = "silent"
+        elif task.get("min_bw") and row["bandwidth_hz"] < task["min_bw"]:
+            row["drop_reason"] = "narrowband"
         elif role == "speech" and row["clip_ratio"] > CLEAN["speech_max_clip_ratio"]:
             row["drop_reason"] = "clipping"
         if row["drop_reason"]:

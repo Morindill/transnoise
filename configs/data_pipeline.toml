@@ -20,6 +20,7 @@ tier_b_hz = 10000   # >= 此值为 B 级，否则 C 级
 [clean]
 min_duration = 1.0          # 秒；语音和噪声
 rir_min_duration = 0.05
+long_noise_chunk_sec = 60   # 设了 channel 的长录音（如 WHAM!）切成多长一段处理；结尾不足半段的并进最后一段
 speech_max_clip_ratio = 0.001
 
 [clean.min_rms_db]          # dBFS，低于则判为静音
@@ -35,4 +36,4 @@ workers = 32         # 解码/重采样的进程数；0 = CPU 核数 - 2，最�
 
 [raw_sw]
 chunk_sec = 30      # .sw 长文件切成多长的片段
-block = 100         # 连续多少个片段共用一个切分键，避免相邻片段分到不同集合
+block = 20          # 连续多少个片段共用一个切分键，避免相邻片段分到不同集合

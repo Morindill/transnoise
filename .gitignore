@@ -11,3 +11,13 @@ wheels/
 
 # Data
 data/
+
+# 临时脚本和中间产物（一律放在这里，不放 /tmp 或工程目录之外）
+scratch/
+
+# Eval models: per-model envs and downloaded binaries/weights
+models/*/.venv/
+models/dfn3/bin/
+models/dfn3/*.tar.gz
+models/*/checkpoints/
+train/.venv/

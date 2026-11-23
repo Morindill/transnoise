@@ -1,4 +1,4 @@
-"""数据源注册表。URL 均已用 HEAD 请求核实过可访问（2026-11-20）；许可证请下载前自行复核。"""
+"""数据源注册表。许可证请下载前自行复核。"""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,12 +13,16 @@ class Source:
     lang: str  # en | zh | -
     license: str
     urls: tuple[str, ...] = ()
-    raw_name: str = ""  # 多个 Source 共用同一份原始包时指定（如 musan）
+    raw_name: str = ""  # 多个 Source 共用同一份原始包时指定（如 rirs_noises）
     kind: str = "archive"  # archive: tar/zip；raw: 无头 int16 48k（.sw）
     include: str = ""  # 对包内路径的正则，空 = 所有音频
     speaker: str = ""  # 含命名组 spk 的正则；空 = 无说话人信息
     split: str = ""  # 含命名组 split(train|dev|test) 的上游切分；空 = 哈希
     unwrap: str = ""  # 下载到的是外层 zip 时，里面真正要用的文件名：下载后解出并删掉外层包
+    channel: int | None = None  # 多声道录音只取这一个声道；None = 各声道平均（语音的默认做法）。设了它的源会按 long_noise_chunk_sec 切成段
+    min_bandwidth_hz: int = 0  # 有效带宽低于它的条目丢弃（drop_reason=narrowband）；0 = 不过滤。给噪声设 10000，避免带宽被限制的噪声教坏模型
+    meta_csv: str = ""  # 包内一个 CSV 的路径，按 meta_cols 给出每个文件的上游切分和分组（地点）；空 = 不用
+    meta_cols: tuple[str, str, str] = ("", "", "")  # (文件名列, 切分列, 分组列)；分组写进 speaker 字段
     note: str = ""
 
     @property
@@ -33,6 +37,7 @@ def _openslr(n: int, *files: str) -> tuple[str, ...]:
 _DEMAND = ("DKITCHEN DLIVING DWASHING NFIELD NPARK NRIVER OHALLWAY OMEETING OOFFICE "
            "PCAFETER PRESTO PSTATION SPSQUARE STRAFFIC TBUS TCAR TMETRO").split()
 _XIPH = "https://media.xiph.org/rnnoise/data/"
+_DNS5 = "https://dnschallengepublic.blob.core.windows.net/dns5archive/V5_training_dataset/noise_fullband/datasets_fullband.noise_fullband."
 
 SOURCES: dict[str, Source] = {s.name: s for s in [
     # ---- 英文语音 ----
@@ -67,8 +72,18 @@ SOURCES: dict[str, Source] = {s.name: s for s in [
     Source("demand", "noise", "-", "CC BY 4.0",
            tuple(f"https://zenodo.org/records/1227121/files/{s}_48k.zip" for s in _DEMAND),
            include=r"ch01\.wav$", note="16 路麦克风阵列只取 ch01；VoiceBank-DEMAND 评测集也用了它，注意泄漏"),
-    Source("musan_noise", "noise", "-", "CC BY 4.0（部分条目待核实）",
-           _openslr(17, "musan.tar.gz"), raw_name="musan", include=r"/noise/"),
+    # ---- DNS Challenge 5 噪声：AudioSet（CC BY 4.0）+ Freesound（只选了 CC0），约 150 类，已用语音活动检测去掉含人声的片段 ----
+    Source("dns5_noise", "noise", "-", "AudioSet CC BY 4.0 / Freesound CC0",
+           tuple(_DNS5 + f"{k}_{i:03d}.tar.bz2" for k, n in (("audioset", 7), ("freesound", 2)) for i in range(n)),
+           min_bandwidth_hz=10000,
+           note="压缩包共约 39GB（bz2，解压慢）；AudioSet 片段来自 YouTube（有损压缩，原为 44.1kHz），带宽 < 10 kHz 的丢弃；每个文件按哈希独立切分"),
+    # ---- Expresso：4 位演员的表演性语音（朗读 + 即兴对话，26 种风格，含耳语/大笑/大喊/非语言发声）----
+    Source("expresso", "speech", "en", "CC BY-NC 4.0",
+           ("https://dl.fbaipublicfiles.com/textless_nlp/expresso/data/expresso.tar",),
+           include=r"audio_48khz/(read|conversational)/.*\.wav$", channel=0,
+           speaker=r"audio_48khz/(?:read|conversational)/(?P<spk>ex\d{2})",
+           note="38GB 单个 tar；48kHz 24 位；即兴对话是双声道（一人一声道，互相有串音），只取声道 0，speaker 取声道 0 的演员；"
+                "对话文件长达 20 分钟，按 long_noise_chunk_sec 切段"),
     # ---- 混响：按房间切分（speaker 字段在这里存房间/场地 id），同一个房间的 RIR 不能跨集合 ----
     Source("rirs_simulated", "rir", "-", "Apache 2.0",
            _openslr(28, "rirs_noises.zip"), raw_name="rirs_noises",
@@ -79,19 +94,11 @@ SOURCES: dict[str, Source] = {s.name: s for s in [
            speaker=r"real_rirs_isotropic_noises/(?P<spk>.*?)"
                    r"(?:_(?:\d+|hfrp|hhp|far|near|angla|anglb|imp\d*|rev|[pm]?\d+[lr]))+\.wav$",
            note="排除目录里 92 个 *_noise_* 各向同性噪声录音（它们不是 RIR）；房间 id = 去掉位置/角度后缀的文件名"),
+    # ---- WHAM! 48kHz 噪声：旧金山湾区咖啡馆/餐厅/酒吧/公园的双耳录音，已去掉可听懂的语音；44 个地点，78.5 小时 ----
+    Source("wham_noise", "noise", "-", "CC BY-NC 4.0（仅限非商用）",
+           ("https://my-bucket-a8b4b49c25c811ee9a7e8bba05fa24c7.s3.amazonaws.com/high_res_wham.zip",),
+           include=r"high_res_wham/audio/.*\.wav$", channel=0, min_bandwidth_hz=10000,
+           meta_csv="high_res_wham/high_res_metadata.csv", meta_cols=("Filename", "WHAM! Split", "Location ID"),
+           note="48kHz 24 位双声道，只取左声道（下混会在高频造成梳状滤波）；切分用上游的按地点划分（地点不跨集合），speaker 字段存地点 id；"
+                "最大的文件 49 分钟，按 long_noise_chunk_sec 切段后处理"),
 ]}
-
-SETS: dict[str, list[str]] = {
-    "phase1": ["libritts_r", "rnnoise_noise", "demand", "musan_noise", "rirs_simulated", "rirs_real"],
-    "phase2": ["aishell1", "aishell3", "vctk", "ears"],
-}
-
-
-def resolve(names: list[str]) -> list[Source]:
-    out: list[Source] = []
-    for n in names:
-        for m in SETS.get(n, [n]):
-            if m not in SOURCES:
-                raise SystemExit(f"未知数据源: {m}（可用: {', '.join(SOURCES)}；集合: {', '.join(SETS)}）")
-            out.append(SOURCES[m])
-    return out

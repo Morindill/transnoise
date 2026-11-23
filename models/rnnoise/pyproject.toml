@@ -1,0 +1,14 @@
+# RNNoise（pyrnnoise：自带编译好的 manylinux wheel，不需要编译器）。
+# 独立 uv 环境，不要和主项目混装。用法：uv sync --project models/rnnoise
+[project]
+name = "model-rnnoise"
+version = "0"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "pyrnnoise",
+    "soundfile",
+    "numpy",
+]
+
+[tool.uv]
+package = false

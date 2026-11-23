@@ -19,7 +19,7 @@ from .progress import Bar
 from .registry import SOURCES, Source
 
 DL = CFG["download"]
-HEADERS = {"User-Agent": "noise-cancel/0.1"}
+HEADERS = {"User-Agent": "transnoise/0.1"}
 CHUNK = DL["chunk_mb"] << 20
 BLOCK = DL["block_mb"] << 20
 

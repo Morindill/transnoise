@@ -1,4 +1,4 @@
-"""流式遍历 tar / tgz / zip（含嵌套 tar），不解压到磁盘。"""
+"""流式遍历 tar / tgz / tar.bz2 / zip（含嵌套 tar），不解压到磁盘。"""
 
 import re
 import tarfile
@@ -7,8 +7,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import BinaryIO
 
-_TAR = re.compile(r"\.(tar|tar\.gz|tgz)$", re.I)
-ARCHIVE_EXT = (".tar", ".tar.gz", ".tgz", ".zip")
+_TAR = re.compile(r"\.(tar|tar\.gz|tgz|tar\.bz2)$", re.I)
+ARCHIVE_EXT = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".zip")
 
 Entry = tuple[str, Callable[[], bytes]]
 

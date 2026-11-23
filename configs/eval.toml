@@ -1,0 +1,29 @@
+# 评测配置：只管测试集、指标和资源位置。评测的输入输出是固定的——
+#   输入 = 测试集 + 一个增强后的 wav 目录（48kHz 单声道，文件名 <id>.wav），输出 = 每条一行的分数。
+# 评测不知道 wav 是哪个模型产生的；各模型的推理工具在 models/<名>/run.py，是一次性工具，不属于评测。
+
+[assets]
+dnsmos_p835 = "data/eval/assets/dnsmos/sig_bak_ovr.onnx"   # DNSMOS P.835（SIG/BAK/OVRL），只需 onnxruntime
+
+[metrics]
+metric_sr = 16000           # PESQ、STOI、DNSMOS 都在 16kHz 上算；SI-SDR 在 48kHz 上算
+max_lag_ms = 500            # 估计模型延迟时的搜索范围（互相关）；所有模型统一"自己对齐"，不用模型内部的延迟补偿
+
+# 测试集：只用 index 里 split=test 的语音/噪声/RIR，固定种子，生成一次后不再变。
+# 语音按"来源"轮流抽（每个来源数量接近），方便报告时按来源切片；SNR 在 snrs 里循环分配，每档数量相同。
+# SNR 按整段功率计算。reverb=true 时先把语音和 RIR 卷积，参考信号是"带混响的干净语音"（只评估去噪，不评估去混响）。
+[testsets.noise]
+reverb = false
+n_per_lang = 300
+snrs = [-5, 0, 5, 10, 15, 20]
+min_duration = 3.0
+max_duration = 10.0
+seed = 0
+
+[testsets.reverb]
+reverb = true
+n_per_lang = 300
+snrs = [-5, 0, 5, 10, 15, 20]
+min_duration = 3.0
+max_duration = 10.0
+seed = 1

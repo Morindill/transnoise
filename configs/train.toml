@@ -1,0 +1,46 @@
+# 训练超参。只在 train 环境（Keras + TensorFlow）里使用。损失和优化器参照 DFN3 的 config.ini；
+# 学习率的取值来自 DFN3（GRU 结构），没有针对 Transformer 单独调过。
+
+[run]
+name = "baseline"        # 检查点目录 = data/checkpoints/<name>/
+seed = 0
+
+[batch]
+crop_seconds = 3.0       # 训练片段长度（DFN3 也是 3 秒）
+batch_size = 32          # 实测（RTX 4070 SUPER，3 秒片段）：峰值显存 5.7 GB、199 条/秒；batch 32 是 3.0 GB / 207 条/秒（速度已饱和）。见 train/measure_batch.py
+
+[loss]
+gamma = 0.3              # 幅度压缩指数：|X|^gamma
+fft_sizes = [256, 512, 1024, 2048]   # 多分辨率，hop = fft/4
+weight_mag = 500.0       # 压缩幅度的 MSE
+weight_complex = 500.0   # 压缩复数谱（带相位）的 MSE
+
+[optim]
+peak_lr = 2e-3
+min_lr = 1e-6
+warmup_steps = 2000      # 线性预热到 peak_lr，然后余弦退火到 min_lr
+total_steps = 100000
+weight_decay = 0.01      # 不作用于 bias / LayerNorm / 相对位置偏置
+beta2 = 0.98
+clip_norm = 1.0          # 全局梯度范数裁剪
+
+[checkpoint]                # 存到 data/checkpoints/<run.name>/
+every_steps = 1000
+keep_last = 3            # 滚动保留最近几个；best 另存
+
+[data]                   # 在线混合（src/transnoise/training/dataset.py）：每一步现场抽 语音 × 噪声 × (RIR) × SNR，不预先混好
+p_reverb = 0.15          # 带混响的样本比例；这类样本的目标是"带混响的干净语音"（只去噪，和 reverb 测试集口径一致）
+snr_min = -5.0           # SNR 在 [snr_min, snr_max] 内均匀抽取（dB，按整段功率）
+snr_max = 40.0
+speech_db_min = -40.0    # 干净语音整体电平（dBFS RMS）在这个范围内均匀抽取：模型的 ERB 特征用固定 dB 偏移，必须见过各种音量
+speech_db_max = -15.0
+workers = 12             # 数据进程数（机器 28 个逻辑核，留出主进程和 TF 的线程）
+prefetch = 8             # 提前准备几个 batch（每个约 74 MB）
+val_batches = 16         # 验证集固定 16 个 batch（固定种子，每次评估用同一批）
+
+[loop]                   # 训练循环（training/run.py）
+log_every = 100          # 每多少步打印/记录一次
+eval_every = 1000        # 每多少步在固定验证集上评估一次（原始权重和 EMA 权重各一次），EMA 更优就存 best/
+ema_decay = 0.999        # 权重滑动平均；评估和导出用 EMA 权重（衰减在最初几步按 (1+t)/(10+t) 渐进，不会被初值拖住）
+nan_patience = 5         # 连续这么多步损失/梯度出现 NaN/Inf（这些步会被跳过、不更新）就回滚到上一个检查点
+max_rollbacks = 3        # 回滚超过这个次数就停下报错
