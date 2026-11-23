@@ -334,13 +334,13 @@ Prerequisites on Windows: Visual Studio with the C++ toolchain (the script expec
 
 ### 8.1 Build
 
-First make sure `cpp/gen/weights.bin` and `cpp/gen/config.h` exist for the model you want (section 7, steps 1-2). Then run in a Windows `cmd` (the project lives on the WSL filesystem; `pushd` maps the `\\wsl.localhost` path to a temporary drive letter, which cmd, MSVC and Ninja need):
+First make sure `cpp/gen/weights.bin` and `cpp/gen/config.h` exist for the model you want (section 7, steps 1-2). Then run in a Windows `cmd` (the project lives on the WSL filesystem; `pushd` maps the `\\wsl.localhost\...` path to a temporary drive letter, which cmd, MSVC and Ninja need):
 
 ```
-cmd /c "pushd \\wsl.localhost\Ubuntu\home\morindill\transnoise\plugin && .\build_win.bat"
+cmd /c "pushd \\wsl.localhost\<distro>\<path-to-repo>\plugin && .\build_win.bat"
 ```
 
-(Adjust the distribution name and user in the UNC path to your setup.) The first build takes about 2 minutes, later ones are incremental. The result:
+(Replace `<distro>` with your WSL distribution name and `<path-to-repo>` with the repository path inside it, using backslashes. If the repository is on a Windows drive, just `cd plugin` and run `build_win.bat`.) The first build takes about 2 minutes, later ones are incremental. The result:
 
 ```
 plugin\build\Transnoise_artefacts\Release\VST3\Transnoise.vst3
@@ -408,3 +408,12 @@ data/                    git-ignored: raw/, staged/, manifests/, index/, checkpo
 | Download interrupted | run the same `download` command again; chunks already fetched are kept |
 | Plugin build cannot find `weights.bin` | run `export` and `pack` first (section 7) |
 | Plugin does nothing | the host is not running at 48 kHz, or the weights failed to load; the plugin then passes audio through |
+
+## 12. License
+
+| Part | License |
+|---|---|
+| Everything except `plugin/` (C++ core in `cpp/`, training, data pipeline, evaluation, scripts) | MIT, see `LICENSE` |
+| `plugin/` (the VST3 / standalone plugin, built with JUCE) | AGPLv3, see `plugin/LICENSE` |
+
+The plugin links the MIT-licensed core, which is allowed; the combined plugin binary is distributed under the AGPLv3, and so are its sources. Third-party data sources have their own licenses (listed in `src/transnoise/data_pipeline/registry.py`); trained weights inherit the restrictions of the data they were trained on.
