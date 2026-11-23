@@ -1,4 +1,4 @@
-"""流式遍历 tar / tgz / tar.bz2 / zip（含嵌套 tar），不解压到磁盘。"""
+"""Stream through tar / tgz / tar.bz2 / zip archives (including nested tars) without extracting to disk."""
 
 import re
 import tarfile
@@ -18,10 +18,11 @@ def archives_in(raw_dir: Path) -> list[Path]:
 
 
 def iter_files(f: BinaryIO, on_pos: Callable[[int], None]) -> Iterator[Entry]:
-    """产出 (包内路径, 读取函数)。读取函数必须在迭代器前进之前调用。
+    """Yield (path inside the archive, read function). The read function must be called before the iterator advances.
 
-    on_pos(已读取的压缩字节数) 每产出一个文件调用一次，用作进度。zip 不能用 f.tell()：
-    ZipFile 一上来就读文件末尾的目录，指针会先跳到末尾，所以 zip 用条目在文件里的偏移量。
+    on_pos(compressed bytes read so far) is called once per yielded file and drives the progress bar. zip cannot use
+    f.tell(): ZipFile reads the central directory at the end of the file first, so the pointer jumps to the end; for zip
+    the entry's offset in the file is used instead.
     """
     if zipfile.is_zipfile(f):
         with zipfile.ZipFile(f) as z:

@@ -1,5 +1,5 @@
-"""训练数据自检（读真实的 data/index/train.jsonl，不训练）：形状/数值、SNR 是否落在配置范围、确定性、续训位置、吞吐和内存。
-用法：uv run transnoise check data"""
+"""Training-data self-check (reads the real data/index/train.jsonl, no training): shapes/values, whether SNR falls in the configured range, determinism, resume position, throughput and memory.
+Usage: uv run transnoise check data"""
 
 import time
 
@@ -28,7 +28,7 @@ def main() -> None:
     idx = src.idx
     print(f"索引加载 {time.perf_counter() - t0:.1f}s：语音 {len(idx.speech_path)} 条；噪声 {len(idx.noise_path)} 个文件；RIR {len(idx.rir)} 个来源 {[len(p) for p in idx.rir]}")
 
-    # 1) 形状、数值、峰值
+    # 1) shapes, values, peak
     noisy, clean, cutoff = src.batch(0)
     check("形状", noisy.shape == clean.shape == (cfg.batch_size, cfg.samples) and cutoff.shape == (cfg.batch_size,),
           f"{noisy.shape}，dtype={noisy.dtype}")
@@ -37,30 +37,43 @@ def main() -> None:
     check("截止频率取自语料带宽", cutoff.min() >= 4000 and cutoff.max() <= 24000, f"范围 {cutoff.min():.0f}–{cutoff.max():.0f} Hz，"
           f"A/B/C 混合：{np.round(np.percentile(cutoff, [10, 50, 90]))}")
 
-    # 2) SNR 和混响比例：用 sample() 抽 400 个，实测 SNR 必须等于抽到的 SNR（peak 缩放不改变 SNR），混响比例接近 p_reverb
+    # 2) sample kinds, SNR and reverb ratio: draw 2000 with sample(). The measured SNR of mixed samples must equal the drawn SNR (peak scaling does not change SNR);
+    #    the reverb ratio is close to p_reverb (counted among samples with speech); noise-only targets are all zeros, clean_only target = input, silence all zeros
     rng = np.random.default_rng(7)
-    errs, rev, snrs, levels = [], 0, [], []
-    for _ in range(400):
+    n_total = 2000
+    kinds, errs, rev, snrs, levels = {}, [], 0, [], []
+    bad_target = 0
+    for _ in range(n_total):
         n_, c_, _, info = src.sample(rng)
-        errs.append(abs(10 * np.log10((c_ @ c_) / (((n_ - c_) ** 2).sum())) - info["snr_db"]))
-        rev += info["reverb"]
-        snrs.append(info["snr_db"])
-        levels.append(20 * np.log10(np.sqrt(np.mean(c_ ** 2)) + 1e-9))
+        k = info["kind"]
+        kinds[k] = kinds.get(k, 0) + 1
+        if k == "mixed":
+            errs.append(abs(10 * np.log10((c_ @ c_) / (((n_ - c_) ** 2).sum())) - info["snr_db"]))
+            snrs.append(info["snr_db"])
+        if k in ("mixed", "clean_only"):
+            rev += info["reverb"]
+            levels.append(20 * np.log10(np.sqrt(np.mean(c_ ** 2)) + 1e-9))
+        bad_target += (k in ("noise_only", "silence") and c_.any()) or (k == "clean_only" and not np.array_equal(n_, c_))
+    n_speech = kinds["mixed"] + kinds.get("clean_only", 0)
+    print("      样本类型：" + "，".join(f"{k} {v / n_total:.1%}" for k, v in sorted(kinds.items())))
+    check("样本类型比例 ≈ 配置", all(abs(kinds.get(k, 0) / n_total - p) < 0.02 for k, p in
+                               (("noise_only", cfg.p_noise_only), ("clean_only", cfg.p_clean), ("silence", cfg.p_silence))))
+    check("目标正确（纯噪声/静音全零，clean_only 目标 = 输入）", bad_target == 0)
     check("实测 SNR = 抽到的 SNR", max(errs) < 0.05, f"最大偏差 {max(errs):.3f} dB；SNR 范围 {min(snrs):.1f}…{max(snrs):.1f}")
-    check("混响比例 ≈ p_reverb", abs(rev / 400 - cfg.p_reverb) < 0.06, f"{rev / 400:.3f} vs {cfg.p_reverb}")
+    check("混响比例 ≈ p_reverb", abs(rev / n_speech - cfg.p_reverb) < 0.03, f"{rev / n_speech:.3f} vs {cfg.p_reverb}")
     print(f"      干净语音电平 {np.percentile(levels, [5, 50, 95]).round(1)} dBFS（5/50/95 分位）")
 
-    # 3) 确定性：同一个 step 永远是同一个 batch，不同 step 不同
+    # 3) determinism: the same step always yields the same batch, different steps differ
     a, b = src.batch(5)[0], src.batch(5)[0]
     check("确定性：同 step 同 batch", np.array_equal(a, b))
     check("不同 step 不同 batch", not np.array_equal(a, src.batch(6)[0]))
 
-    # 4) 多进程 Loader：从 step 3 开始取，必须和单进程 batch(3) 完全一致（续训位置正确）；同时测吞吐和内存
+    # 4) multiprocess Loader: starting from step 3 it must match the single-process batch(3) exactly (correct resume position); also measure throughput and memory
     base = meminfo()
     ld = Loader(src, start=3, workers=cfg.workers, prefetch=cfg.prefetch)
     first = next(ld)
     check("Loader 从指定 step 续上，内容一致", all(np.array_equal(x, y) for x, y in zip(first, src.batch(3))))
-    for _ in range(cfg.prefetch):  # 等预取队列稳定
+    for _ in range(cfg.prefetch):  # wait for the prefetch queue to settle
         next(ld)
     t0, n_batches, peak = time.perf_counter(), 40, 0.0
     for _ in range(n_batches):
@@ -71,7 +84,7 @@ def main() -> None:
     check("吞吐足以喂饱 GPU（实测 GPU 约 200 条/秒）", rate > 250, f"{rate:.0f} 条/秒（{cfg.workers} 个数据进程），系统内存比空闲时多用 {peak:.1f} GB")
     ld.close()
 
-    # 5) 噪声来源概览（读 index）：各切分里每个来源的小时数和带宽分级。验证集里全频带噪声太少，验证损失就会偏低
+    # 5) noise source overview (reads the index): hours and bandwidth tiers per source in each split. With too little full-band noise in the validation set the validation loss comes out too low
     import json
 
     from transnoise.paths import DATA, INDEX
@@ -97,7 +110,7 @@ def main() -> None:
     check("验证集里有足够的全频带噪声（≥ 3 小时 A/B 级，否则验证损失偏低、检测不出高频残留）", fullband["val"] >= 3.0,
           f"验证集 A/B 级约 {fullband['val']:.1f} h / 总 {full['val']:.1f} h；训练集 {fullband['train']:.1f} / {full['train']:.1f}")
 
-    if wham_rows:  # WHAM! 专项：地点不跨集合、没有窄带文件、文件都在
+    if wham_rows:  # WHAM! specifics: locations do not cross sets, no narrow-band files, all files exist
         loc_splits: dict = {}
         for split, r in wham_rows:
             loc_splits.setdefault(r["speaker"], set()).add(split)

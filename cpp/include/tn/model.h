@@ -1,6 +1,6 @@
-// 流式降噪模型的 C++ 实现：所有形状来自 config.h（编译期常量），权重来自 weights.bin（加载时校验）。
-// 逐帧处理（每次 HOP 个样本），带 KV 缓存；实时路径（push）不分配内存、不加锁、不抛异常。
-// 数值上和 numpy 参考实现（transnoise/deploy/ref.py）一一对应，算法说明见那里。
+// C++ implementation of the streaming denoising model: all shapes come from config.h (compile-time constants), the weights from weights.bin (validated on load).
+// Frame-by-frame processing (HOP samples at a time) with a KV cache; the real-time path (push) does not allocate memory, take locks or throw exceptions.
+// Numerically it corresponds one-to-one to the numpy reference (transnoise/deploy/ref.py); see there for the algorithm description.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -17,7 +17,7 @@
 
 namespace tn {
 
-// ---------------------------------------------------------------- 权重
+// ---------------------------------------------------------------- weights
 class Weights {
  public:
   struct Lin {
@@ -31,16 +31,15 @@ class Weights {
   Lin erb_in, spec_in, mix, gain, df;
   Block blk[LAYERS];
 
-  // 从 weights.bin 的内容构造（拷贝到 64 字节对齐的内部存储）。形状/常量/名字对不上就抛异常（只在加载时）。
+  // Construct from the contents of weights.bin (copied into 64-byte aligned internal storage). Throws on a shape/constant/name mismatch (at load time only).
   Weights(const uint8_t* data, size_t size) {
-    constexpr size_t kHead = 8 + 16;
-    if (size < kHead || std::memcmp(data, "NCWGT001", 8) != 0) throw std::runtime_error("weights.bin：魔数不对");
-    uint32_t ver, n_const, n_tensors;
-    std::memcpy(&ver, data + 8, 4);
-    std::memcpy(&n_const, data + 12, 4);
-    std::memcpy(&n_tensors, data + 16, 4);
+    constexpr size_t kHead = 8 + 8;
+    if (size < kHead || std::memcmp(data, "TNWEIGHT", 8) != 0) throw std::runtime_error("weights.bin：魔数不对");
+    uint32_t n_const, n_tensors;
+    std::memcpy(&n_const, data + 8, 4);
+    std::memcpy(&n_tensors, data + 12, 4);
     constexpr size_t n_expect = sizeof(CONSTS) / sizeof(CONSTS[0]);
-    if (ver != 1 || n_const != n_expect) throw std::runtime_error("weights.bin：版本或常量个数不对");
+    if (n_const != n_expect) throw std::runtime_error("weights.bin：常量个数不对");
     const uint8_t* p = data + kHead;
     for (size_t i = 0; i < n_expect; ++i) {
       int32_t v;
@@ -63,7 +62,7 @@ class Weights {
     size_t data_off = static_cast<size_t>(p - data);
     data_off += (64 - data_off % 64) % 64;
     if (size != data_off + total * 4) throw std::runtime_error("weights.bin：大小不对");
-    store_ = static_cast<float*>(::operator new(((total * 4 + 63) / 64) * 64, std::align_val_t(64)));  // std::aligned_alloc 在 MSVC 上没有
+    store_ = static_cast<float*>(::operator new(((total * 4 + 63) / 64) * 64, std::align_val_t(64)));  // std::aligned_alloc is not available on MSVC
     std::memcpy(store_, data + data_off, total * 4);
 
     auto take = [&](const std::string& name, size_t count) -> const float* {
@@ -97,18 +96,18 @@ class Weights {
   float* store_ = nullptr;
 };
 
-// ---------------------------------------------------------------- 内核
+// ---------------------------------------------------------------- kernels
 namespace kern {
 
-// 编译期平方根（牛顿迭代，用 double）：std::sqrt 在 MSVC 上不是 constexpr，GCC 的 __builtin_sqrtf 在 MSVC 上没有
+// Compile-time square root (Newton iteration in double): std::sqrt is not constexpr on MSVC, and GCC's __builtin_sqrtf does not exist on MSVC
 constexpr double csqrt(double x) {
   double g = x > 1.0 ? x / 2 : 1.0;
   for (int i = 0; i < 60; ++i) g = 0.5 * (g + x / g);
   return g;
 }
 
-// y = b + x·W，W 是 [IN][OUT] 行主序。外层循环在输入维，内层在输出维：每个输出元素的累加顺序固定（不需要重排浮点），
-// 编译器可以直接向量化内层循环。
+// y = b + x*W, with W in [IN][OUT] row-major order. The outer loop runs over the input dimension and the inner one over the output dimension:
+// every output element accumulates in a fixed order (no floating-point reordering needed) and the compiler can vectorize the inner loop directly.
 template <int IN, int OUT>
 inline void linear(const float* __restrict x, const Weights::Lin& l, float* __restrict y) {
   for (int j = 0; j < OUT; ++j) y[j] = l.b[j];
@@ -121,7 +120,7 @@ inline void linear(const float* __restrict x, const Weights::Lin& l, float* __re
 
 inline float gelu(float x) { return 0.5f * x * (1.0f + std::erf(x / 1.41421356237f)); }
 
-// 只做归一化（γ、β 已经折进后面的线性层）
+// Normalization only (gamma and beta are already folded into the following linear layer)
 inline void ln_norm(const float* x, float* y) {
   float mean = 0.f;
   for (int i = 0; i < D; ++i) mean += x[i];
@@ -138,15 +137,15 @@ inline void ln_norm(const float* x, float* y) {
 
 }  // namespace kern
 
-// ---------------------------------------------------------------- 流式降噪（单声道，一个实例 = 一路音频的全部状态）
-struct Trace {  // 对拍用：每输出一帧填一次
+// ---------------------------------------------------------------- streaming denoiser (mono; one instance = all the state of one audio stream)
+struct Trace {  // for cross-checking: filled once per output frame
   float emb[D], layer[LAYERS][D], xn[D], gains[NB_ERB], coefs[NB_DF * ORDER * 2], re[BINS], im[BINS];
 };
 
 class Denoiser {
  public:
-  static_assert(FFT == 2 * HOP, "实现假设 fft == 2·hop");
-  static_assert(ORDER > LA, "df_order 必须 > lookahead");
+  static_assert(FFT == 2 * HOP, "the implementation assumes fft == 2*hop");
+  static_assert(ORDER > LA, "df_order must be > lookahead");
 
   explicit Denoiser(const Weights& w) : w_(w) {
     for (int k = 0; k < FFT; ++k) win_[k] = static_cast<float>(std::sin(kPi / 2 * std::pow(std::sin(kPi * (k + 0.5) / FFT), 2)));
@@ -166,11 +165,11 @@ class Denoiser {
     t_ = -1;
   }
 
-  Trace* trace = nullptr;  // 非空时每帧输出都写进去
+  Trace* trace = nullptr;  // when non-null, every output frame is written into it
 
-  // 喂入 HOP 个样本；准备好输出时写 HOP 个样本到 out 并返回 true（前 LA+1 次调用返回 false）。in 和 out 可以是同一块内存。
+  // Feed HOP samples; when output is ready, write HOP samples to out and return true (the first LA+1 calls return false). in and out may be the same memory.
   bool push(const float* in, float* out) {
-    // --- STFT：帧 = [上一块, 这一块] × 窗
+    // --- STFT: frame = [previous block, this block] x window
     cf z[FFT], spec[FFT];
     for (int i = 0; i < HOP; ++i) {
       z[i] = {prev_[i] * win_[i], 0.f};
@@ -184,7 +183,7 @@ class Denoiser {
     for (int k = 0; k < BINS; ++k) hre[k] = spec[k].re, him[k] = spec[k].im;
     ++t_;
 
-    // --- 特征 → 嵌入 → 第 0 层的 QKV（K/V 进缓存，嵌入和 Q 进待处理队列）
+    // --- features -> embedding -> layer 0's QKV (K/V go into the cache, the embedding and Q into the pending queue)
     float emb[D], q[D];
     embed(hre, him, emb);
     qkv(0, emb, q);
@@ -193,7 +192,7 @@ class Denoiser {
     std::memcpy(pend_q_[slot], q, sizeof q);
     ++pend_n_;
 
-    const int u = static_cast<int>(t_ - LA);  // 现在能确定的帧
+    const int u = static_cast<int>(t_ - LA);  // the frame that can be finalized now
     if (u < 0) return false;
     float x[D];
     std::memcpy(x, pend_x_[pend_head_], sizeof x);
@@ -210,7 +209,7 @@ class Denoiser {
       if (trace) std::memcpy(trace->layer[i], x, sizeof x);
     }
 
-    // --- 输出头
+    // --- output heads
     float xn[D], gains[NB_ERB], coefs[NB_DF * ORDER * 2];
     kern::ln_norm(x, xn);
     kern::linear<D, NB_ERB>(xn, w_.gain, gains);
@@ -218,8 +217,8 @@ class Denoiser {
     kern::linear<D, NB_DF * ORDER * 2>(xn, w_.df, coefs);
     for (int i = 0; i < NB_DF * ORDER * 2; ++i) coefs[i] = std::tanh(coefs[i]);
 
-    // 第 u 帧 = n - LA 帧的频谱 × ERB 增益；低 NB_DF 个频点改用深度滤波 Y[f] = g[f]·Σ_k W[f,k]·X[n-k][f]（g 是该频点所在频带的增益）
-    cf* o = spec;  // 复用
+    // The spectrum of frame u = n - LA times the ERB gain; the lowest NB_DF bins use the deep filter instead, Y[f] = g[f] * sum_k W[f,k] * X[n-k][f] (g is the gain of the band containing bin f)
+    cf* o = spec;  // reuse
     float gate[NB_DF];
     {
       const float* sre = hist_re_[(hist_head_ - LA + ORDER) % ORDER];
@@ -249,19 +248,19 @@ class Denoiser {
       for (int k = 0; k < BINS; ++k) trace->re[k] = o[k].re, trace->im[k] = o[k].im;
     }
 
-    // --- 逆 STFT：补成厄米对称的完整谱，用 conj-FFT 做逆变换，乘窗，重叠相加
+    // --- inverse STFT: fill out a Hermitian-symmetric full spectrum, invert with a conj-FFT, apply the window, overlap-add
     cf full[FFT], tmp[FFT];
-    full[0] = {o[0].re, 0.f};  // 和 numpy.fft.irfft 一样忽略直流和奈奎斯特的虚部
+    full[0] = {o[0].re, 0.f};  // like numpy.fft.irfft, ignore the imaginary parts of DC and Nyquist
     full[FFT / 2] = {o[FFT / 2].re, 0.f};
     for (int k = 1; k < FFT / 2; ++k) {
-      full[k] = {o[k].re, -o[k].im};  // 先放 conj，forward 之后再取共轭 = 逆变换
+      full[k] = {o[k].re, -o[k].im};  // store the conjugate first; taking the conjugate again after forward = inverse transform
       full[FFT - k] = {o[k].re, o[k].im};
     }
     fft_.forward(full, tmp);
     const float scale = 1.0f / FFT;
     float seg[FFT];
     for (int i = 0; i < FFT; ++i) seg[i] = tmp[i].re * scale * win_[i];
-    if (u == 0) {  // 第 0 帧前面的补零区，丢掉输出，但要把后半帧留给下一次重叠相加
+    if (u == 0) {  // the zero-padded region before frame 0: drop the output, but keep the second half for the next overlap-add
       std::memcpy(tail_, seg + HOP, sizeof tail_);
       return false;
     }
@@ -271,7 +270,7 @@ class Denoiser {
   }
 
  private:
-  static constexpr int CAP = WINDOW + LA + 1;  // 每层 K/V 环形缓冲的容量（第 1 层以后用不满）
+  static constexpr int CAP = WINDOW + LA + 1;  // capacity of each layer's K/V ring buffer (not fully used from layer 1 on)
 
   void embed(const float* re, const float* im, float* emb) {
     float feat_erb[NB_ERB], feat_spec[2 * NB_DF];
@@ -284,7 +283,7 @@ class Denoiser {
     float mag = 0.f;
     for (int f = 0; f < NB_DF; ++f) mag += std::sqrt(re[f] * re[f] + im[f] * im[f] + 1e-12f);
     mag /= NB_DF;
-    const float inv = 1.0f / (mag + 1e-6f);  // numpy 版是除法；这里用乘倒数，差 1 ulp 以内
+    const float inv = 1.0f / (mag + 1e-6f);  // the numpy version divides; this multiplies by the reciprocal, within 1 ulp
     for (int f = 0; f < NB_DF; ++f) feat_spec[f] = re[f] * inv, feat_spec[NB_DF + f] = im[f] * inv;
     float h[2 * D];
     kern::linear<NB_ERB, D>(feat_erb, w_.erb_in, h);
@@ -293,7 +292,7 @@ class Denoiser {
     kern::linear<2 * D, D>(h, w_.mix, emb);
   }
 
-  // LN → QKV；K/V 写进第 i 层缓存，Q 返回。
+  // LN -> QKV; K/V are written into layer i's cache, Q is returned.
   void qkv(int i, const float* x, float* q) {
     float xn[D], r[3 * D];
     kern::ln_norm(x, xn);
@@ -305,15 +304,15 @@ class Denoiser {
     ++kn_[i];
   }
 
-  // 第 i 层对帧 u 的注意力 + 前馈，原地更新 x。
+  // Layer i's attention + feed-forward for frame u, updating x in place.
   void attend(int i, float* x, const float* q, int u) {
     const int la = i == 0 ? LA : 0;
-    const int m = std::min(u, WINDOW) + la + 1;  // 存在的键：帧 u-min(u,W) … u+la
+    const int m = std::min(u, WINDOW) + la + 1;  // keys that exist: frames u-min(u,W) ... u+la
     const int first = static_cast<int>((kn_[i] - m) % CAP + CAP) % CAP;
     const float* rel = w_.blk[i].rel;
     const int rel_n = WINDOW + la + 1, rel0 = WINDOW + la - m + 1;
     constexpr float inv_sqrt_dh = 1.0f / static_cast<float>(kern::csqrt(DH));
-    constexpr int DH8 = DH / 8 * 8;  // 点积按 8 路累加；DH 不是 8 的倍数时，余下的几维依次加进前几路
+    constexpr int DH8 = DH / 8 * 8;  // the dot product accumulates in 8 lanes; when DH is not a multiple of 8, the remaining dimensions are added to the first lanes in turn
     float ctx[D];
     for (int h = 0; h < HEADS; ++h) {
       float s[CAP];
@@ -321,7 +320,7 @@ class Denoiser {
       for (int j = 0, pos = first; j < m; ++j, pos = pos + 1 == CAP ? 0 : pos + 1) {
         const float* kk = k_[i][pos] + h * DH;
         const float* qq = q + h * DH;
-        float acc[8] = {};  // 固定的 8 路累加，顺序确定，也方便向量化
+        float acc[8] = {};  // fixed 8-lane accumulation: a deterministic order that also vectorizes easily
         for (int d = 0; d < DH8; d += 8)
           for (int l = 0; l < 8; ++l) acc[l] += qq[d + l] * kk[d + l];
         for (int d = DH8; d < DH; ++d) acc[d - DH8] += qq[d] * kk[d];
@@ -358,7 +357,7 @@ class Denoiser {
   float hist_re_[ORDER][BINS], hist_im_[ORDER][BINS];
   int hist_head_;
   alignas(64) float k_[LAYERS][CAP][D], v_[LAYERS][CAP][D];
-  int64_t kn_[LAYERS];  // Windows 上 long 只有 32 位，用 int64_t
+  int64_t kn_[LAYERS];  // long is only 32 bits on Windows, so use int64_t
   alignas(64) float pend_x_[LA + 1][D], pend_q_[LA + 1][D];
   int pend_head_, pend_n_;
   int64_t t_;

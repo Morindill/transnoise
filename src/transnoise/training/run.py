@@ -1,12 +1,12 @@
-"""训练循环：  uv run transnoise train [--name 名字] [--set 字段=值 ...] [--max-steps N] [--rerun [--yes]]
+"""Training loop:  uv run transnoise train [--name NAME] [--set field=value ...] [--max-steps N] [--rerun [--yes]]
 
-- 有检查点就自动续训；--rerun 先删除这个运行目录里的全部存档（检查点、best、日志、TensorBoard 曲线）再从头训练。
-- Ctrl+C / SIGTERM 会先存档再退出。终端底部是 tqdm 进度条（重定向到文件时自动关闭，只留日志行）。
-- 日志：每 log_every 步一行到终端、<run>/logs.csv 和 TensorBoard（装了才写）；曲线：tensorboard --logdir <run>/tb
-- 每 eval_every 步在固定验证集上评估原始权重和 EMA 权重，EMA 验证损失创新低时存 best/。
-- 连续 nan_patience 步出现 NaN/Inf（这些步已被跳过）就回滚到上一个检查点，超过 max_rollbacks 次停下报错。
+- Resumes automatically when a checkpoint exists; --rerun first deletes everything in the run directory (checkpoints, best, logs, TensorBoard curves) and trains from scratch.
+- Ctrl+C / SIGTERM saves a checkpoint before exiting. A tqdm progress bar sits at the bottom of the terminal (disabled automatically when redirected to a file, leaving only the log lines).
+- Logs: one line every log_every steps to the terminal, <run>/logs.csv and TensorBoard (written only if installed); curves: tensorboard --logdir <run>/tb
+- Every eval_every steps the raw and EMA weights are evaluated on the fixed validation set; best/ is saved when the EMA validation loss reaches a new low.
+- After nan_patience consecutive NaN/Inf steps (those steps are already skipped) it rolls back to the previous checkpoint; more than max_rollbacks rollbacks stop with an error.
 
-注意：数据进程用 spawn 启动，会重新 import 本模块，所以顶层只放轻量 import，TF/Keras 都在 main() 里导入。
+Note: data processes are started with spawn and re-import this module, so only light imports sit at the top level; TF/Keras are imported inside main().
 """
 
 import argparse
@@ -23,12 +23,12 @@ from .config import TrainConfig
 
 try:
     from tqdm import tqdm
-except ImportError:  # 没装就没有进度条，其余照常
+except ImportError:  # without tqdm there is no progress bar; everything else works as usual
     tqdm = None
 
 
 def say(msg: str = "") -> None:
-    """打印一行。有进度条时用 tqdm.write，这样不会和底部的进度条互相覆盖。"""
+    """Print one line. With a progress bar use tqdm.write so it does not overwrite the bar at the bottom."""
     (tqdm.write if tqdm else print)(msg)
 
 
@@ -41,7 +41,7 @@ class _NoBar:
 
 
 class Logger:
-    """终端 + CSV + TensorBoard（可选）。"""
+    """Terminal + CSV + TensorBoard (optional)."""
 
     def __init__(self, run_dir: Path):
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -57,7 +57,7 @@ class Logger:
 
     def log(self, step: int, values: dict) -> None:
         row = {"step": step, "time": time.strftime("%H:%M:%S"), **values}
-        path = self.csv_path.with_name("val.csv" if "val_ema" in values else "logs.csv")  # 训练行和验证行列不同，分两个文件
+        path = self.csv_path.with_name("val.csv" if "val_ema" in values else "logs.csv")  # training rows and validation rows have different columns, so they go to two files
         keys = self.keys.setdefault(path, list(row))
         new = not path.exists()
         with path.open("a", newline="") as f:
@@ -85,7 +85,7 @@ def parse_overrides(cfg: TrainConfig, items: list[str]) -> TrainConfig:
 
 
 def wipe(run_dir: Path, yes: bool) -> None:
-    """--rerun：删除整个运行目录。先列出要删什么；交互终端要求确认，非交互环境必须显式加 --yes。"""
+    """--rerun: delete the whole run directory. First list what will be deleted; an interactive terminal asks for confirmation, a non-interactive environment needs an explicit --yes."""
     if not run_dir.exists():
         say(f"{run_dir} 不存在，没有可删除的存档，直接从头训练")
         return
@@ -126,7 +126,7 @@ def main() -> None:
 
     setup_gpu()
     run_dir.mkdir(parents=True, exist_ok=True)
-    for f in ("model.toml", "train.toml"):  # 配置快照：这次运行用的是什么超参
+    for f in ("model.toml", "train.toml"):  # config snapshot: which hyperparameters this run used
         shutil.copy(ROOT / "configs" / f, run_dir / f"config_{f}")
 
     trainer = Trainer(Denoiser(ModelConfig.load()), cfg, run_dir)
@@ -139,7 +139,7 @@ def main() -> None:
     params = sum(int(np.prod(w.shape)) for w in trainer.model.weights)
     say(f"模型 {params / 1e6:.2f}M 参数；batch {cfg.batch_size} × {cfg.crop_seconds}s；总步数 {cfg.total_steps}；lr 峰值 {cfg.peak_lr}")
 
-    val_src = BatchSource("val", cfg, seed=cfg.seed + 10**6)  # 固定验证集：同一批，每次评估可比
+    val_src = BatchSource("val", cfg, seed=cfg.seed + 10**6)  # fixed validation set: the same batches, so evaluations are comparable
     val = [val_src.batch(i) for i in range(cfg.val_batches)]
     logger = Logger(run_dir)
     train_src = BatchSource("train", cfg)
@@ -152,7 +152,7 @@ def main() -> None:
         return {"best_val": best}
 
     bar = (tqdm(total=cfg.total_steps, initial=trainer.step, unit="step", dynamic_ncols=True, smoothing=0.05, disable=None)
-           if tqdm else _NoBar())  # disable=None：不是交互式终端时自动关闭
+           if tqdm else _NoBar())  # disable=None: switched off automatically when not on an interactive terminal
     start_step, last_saved = trainer.step, trainer.step
     window = {"n": 0, "t": time.perf_counter(), "wait": 0.0, "skipped": 0, "loss": 0.0, "mag": 0.0, "complex": 0.0, "gn": 0.0}
     streak = rollbacks = 0

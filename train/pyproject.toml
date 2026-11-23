@@ -1,16 +1,16 @@
-# 训练环境：Keras 3 + TensorFlow 后端。独立 uv 环境，不要和主项目（评测用 onnxruntime-gpu，CUDA 13）混装：
-# tensorflow[and-cuda] 带的是 CUDA 12 的 nvidia-*-cu12 库，和 onnxruntime-gpu 的 CUDA 13 库放同一个环境可能互相覆盖。
-# 用法：uv sync --project train      运行：uv run transnoise train|infer|export|check|tensorboard（在主环境里，自动切到这个环境）
+# Training environment: Keras 3 + TensorFlow backend. A separate uv environment; do not mix it with the main project (evaluation uses onnxruntime-gpu, CUDA 13):
+# tensorflow[and-cuda] brings the CUDA 12 nvidia-*-cu12 libraries, which may overwrite onnxruntime-gpu's CUDA 13 libraries if both live in one environment.
+# Usage: uv sync --project train      Run: uv run transnoise train|infer|export|check|tensorboard (from the main environment; it switches to this one automatically)
 [project]
 name = "transnoise-train"
 version = "0"
-requires-python = ">=3.12,<3.14"   # TF 2.21 支持 Python 3.10–3.13；主项目要求 >=3.12
+requires-python = ">=3.12,<3.14"   # TF 2.21 supports Python 3.10-3.13; the main project requires >=3.12
 dependencies = [
-    "transnoise",                          # 本仓库（数据管线、模型代码），不带 eval 依赖组
-    "tensorflow[and-cuda]>=2.21,<2.22",      # 2.21.0 是当前稳定版；2.22 还是 rc。[and-cuda] 自带 CUDA 12 / cuDNN 9，系统只需驱动
-    "keras>=3.12",                           # TF 2.21 要求 keras>=3.12
-    "tensorboard",                           # 训练曲线（TF 2.21 起不再自带）；训练脚本没装时只写 CSV
-    "tqdm",                                  # 训练进度条；没装时不显示进度条，其余照常
+    "transnoise",                          # this repository (data pipeline, model code), without the eval dependency group
+    "tensorflow[and-cuda]>=2.21,<2.22",      # 2.21.0 is the current stable release; 2.22 is still an rc. [and-cuda] brings CUDA 12 / cuDNN 9, the system only needs the driver
+    "keras>=3.12",                           # TF 2.21 requires keras>=3.12
+    "tensorboard",                           # training curves (no longer bundled since TF 2.21); without it the training script writes only CSV
+    "tqdm",                                  # training progress bar; without it no bar is shown, everything else works as usual
 ]
 
 [tool.uv]

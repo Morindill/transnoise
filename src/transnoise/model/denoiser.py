@@ -1,6 +1,6 @@
-"""降噪模型：波形 → STFT → 特征 → 编码 → 滑动窗口 Transformer → ERB 增益 + 深度滤波 → 逆 STFT → 波形。
+"""Denoising model: waveform -> STFT -> features -> encoder -> sliding-window Transformer -> ERB gains + deep filter -> inverse STFT -> waveform.
 
-enhance_frames 只处理频谱帧；call 是整段离线前向 = Analysis + enhance_frames + Synthesis。
+enhance_frames only processes spectral frames; call is the whole-clip offline forward = Analysis + enhance_frames + Synthesis.
 """
 
 import keras
@@ -22,16 +22,17 @@ class Denoiser(keras.Model):
         self.erb_in = keras.layers.Dense(d, activation="gelu")
         self.spec_in = keras.layers.Dense(d, activation="gelu")
         self.mix = keras.layers.Dense(d)
-        # 前视只放在第一层（和深度滤波）：后面的层严格因果，总前视 = cfg.lookahead，不随层数累加
+        # Lookahead lives only in the first layer (and the deep filter): later layers are strictly causal, so the total
+        # lookahead = cfg.lookahead and does not accumulate with depth
         self.blocks = [TransformerBlock(d, cfg.n_heads, cfg.ff_mult, cfg.window, cfg.lookahead if i == 0 else 0)
                        for i in range(cfg.n_layers)]
         self.norm_out = keras.layers.LayerNormalization()
         self.gain_head = ErbGainHead(cfg)
-        self.df_head = DeepFilterHead(cfg) if cfg.df_order > 0 else None
+        self.df_head = DeepFilterHead(cfg)
 
     def features(self, re, im):
-        """逐帧特征，不依赖其他帧（所以流式和离线一致）：
-        ERB 特征 = 各频带平均功率的 dB 值做固定仿射；复数特征 = 最低 nb_df 个频点除以本帧平均幅度（与音量无关）。"""
+        """Per-frame features that do not depend on other frames (so streaming and offline agree):
+        ERB feature = a fixed affine map of the per-band mean power in dB; complex feature = the lowest nb_df bins divided by this frame's mean magnitude (independent of volume)."""
         c = self.cfg
         erb = ops.matmul(re * re + im * im, self.erb_fwd)
         feat_erb = (10.0 * ops.log10(erb + 1e-10) + c.erb_db_offset) / c.erb_db_scale
@@ -46,18 +47,18 @@ class Denoiser(keras.Model):
         return self.norm_out(h)
 
     def enhance_frames(self, re, im):
-        """带噪谱帧 [B, F, bins] → 增强谱帧。"""
+        """Noisy spectral frames [B, F, bins] -> enhanced spectral frames."""
         c = self.cfg
         h = self.embed(*self.features(re, im))
         mask = ops.matmul(self.gain_head(h), self.erb_inv)  # [B, F, bins]
-        out_r, out_i = re * mask, im * mask
-        if self.df_head is not None:  # 低 nb_df 个频点：深度滤波（滤波对象是带噪谱）的输出再乘 ERB 增益，增益是 0–1 的门控
-            dr, di = deep_filter(re[..., :c.nb_df], im[..., :c.nb_df], self.df_head(h), c.df_order, c.lookahead)
-            gate = mask[..., :c.nb_df]
-            out_r = ops.concatenate([dr * gate, out_r[..., c.nb_df:]], axis=-1)
-            out_i = ops.concatenate([di * gate, out_i[..., c.nb_df:]], axis=-1)
+        # Lowest nb_df bins: the deep-filter output (the filter acts on the noisy spectrum) times the ERB gain, which is a 0-1 gate;
+        # the remaining bins are simply multiplied by the gain
+        dr, di = deep_filter(re[..., :c.nb_df], im[..., :c.nb_df], self.df_head(h), c.df_order, c.lookahead)
+        gate = mask[..., :c.nb_df]
+        out_r = ops.concatenate([dr * gate, (re * mask)[..., c.nb_df:]], axis=-1)
+        out_i = ops.concatenate([di * gate, (im * mask)[..., c.nb_df:]], axis=-1)
         return out_r, out_i
 
     def call(self, x):
-        """x: [B, T] 48kHz 波形（T 静态已知）→ 增强后的 [B, T]，与输入时间对齐（离线，没有流式延迟）。"""
+        """x: [B, T] 48 kHz waveform (T statically known) -> enhanced [B, T], time-aligned with the input (offline, no streaming delay)."""
         return self.synthesis(self.enhance_frames(*self.analysis(x)), length=x.shape[-1])

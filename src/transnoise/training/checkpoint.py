@@ -1,8 +1,8 @@
-"""断点存档：模型权重 + 优化器状态（含迭代数，学习率进度随之恢复）+ EMA 权重 + 训练循环自己的状态（best 验证损失等）。
+"""Checkpoints: model weights + optimizer state (including the iteration count, so the learning-rate schedule resumes) + EMA weights + the training loop's own state (best validation loss etc.).
 
-目录 <run>/step_00001000/{model.npz, optim.npz, ema.npz, meta.json}，先写到临时目录再改名，所以写到一半被打断不会留下坏的检查点；
-<run>/latest 指向最新一个；滚动保留最近 keep_last 个；best/ 另存（由调用方决定什么时候存）。
-恢复时校验权重个数和形状，结构对不上会直接报错，而不是悄悄加载一半。
+Layout <run>/step_00001000/{model.npz, optim.npz, ema.npz, meta.json}, written to a temporary directory and then renamed, so an interruption never leaves a broken checkpoint;
+<run>/latest points to the newest one; the most recent keep_last are kept on a rolling basis; best/ is stored separately (the caller decides when).
+On restore the number and shapes of the weights are checked; a mismatched architecture raises an error instead of silently loading half of it.
 """
 
 import json
@@ -21,7 +21,7 @@ def _arrays(variables) -> dict[str, np.ndarray]:
 
 def save(run_dir: Path, step: int, model, optimizer, ema, extra: dict | None = None, keep_last: int = 3,
          name: str | None = None) -> Path:
-    """name=None：存成 step_XXXXXXXX 并更新 latest、清理旧的；name="best"：存成 best/，覆盖旧的。"""
+    """name=None: save as step_XXXXXXXX, update latest and prune old ones; name="best": save as best/, overwriting the old one."""
     run_dir.mkdir(parents=True, exist_ok=True)
     final = run_dir / (name or f"step_{step:08d}")
     tmp = run_dir / f".tmp_{final.name}"
@@ -51,7 +51,7 @@ def latest(run_dir: Path) -> Path | None:
 
 
 def load(path: Path, model, optimizer, ema) -> dict:
-    """把 path 里的状态写回已经 build 过的 model、optimizer 和 EMA 变量，返回 meta（含 step 和 extra）。"""
+    """Write the state in path back into the already-built model, optimizer and EMA variables; returns meta (including step and extra)."""
     meta = json.loads((path / "meta.json").read_text())
     for label, vars_, shapes, file in (("模型", model.weights, meta["model_shapes"], "model.npz"),
                                        ("优化器", optimizer.variables, meta["optim_shapes"], "optim.npz"),
@@ -66,7 +66,7 @@ def load(path: Path, model, optimizer, ema) -> dict:
 
 
 def load_weights(path: Path, model, ema: bool = True) -> dict:
-    """推理用：只把权重写进已经 build 过的 model（默认用 EMA 权重），不需要优化器。形状对不上会报错。"""
+    """For inference: write only the weights into the already-built model (EMA weights by default); no optimizer needed. A shape mismatch raises an error."""
     meta = json.loads((path / "meta.json").read_text())
     have = [list(w.shape) for w in model.weights]
     if have != meta["model_shapes"]:

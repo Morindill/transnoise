@@ -1,4 +1,4 @@
-"""输出头：ERB 增益头、深度滤波头，以及深度滤波本身。"""
+"""Output heads: the ERB gain head, the deep-filter head, and the deep filter itself."""
 
 import keras
 from keras import ops
@@ -7,7 +7,7 @@ from .config import ModelConfig
 
 
 class ErbGainHead(keras.layers.Layer):
-    """embedding → nb_erb 个 0–1 的频带增益。"""
+    """embedding -> nb_erb band gains in [0, 1]."""
 
     def __init__(self, cfg: ModelConfig, **kw):
         super().__init__(**kw)
@@ -18,7 +18,7 @@ class ErbGainHead(keras.layers.Layer):
 
 
 class DeepFilterHead(keras.layers.Layer):
-    """embedding → 每帧、每个低频频点、每个滤波阶数一个复数系数 [B, F, nb_df, order, 2]。"""
+    """embedding -> one complex coefficient per frame, low-frequency bin and filter tap: [B, F, nb_df, order, 2]."""
 
     def __init__(self, cfg: ModelConfig, **kw):
         super().__init__(**kw)
@@ -31,8 +31,8 @@ class DeepFilterHead(keras.layers.Layer):
 
 
 def deep_filter(re, im, coefs, order: int, lookahead: int):
-    """对每个频点在时间上做 order 阶复数 FIR：Y[t] = Σ_k W[t,k] · X[t + lookahead - k]（k = 0 … order-1）。
-    re/im: [B, F, nb_df]（带噪谱的最低 nb_df 个频点）；coefs: [B, F, nb_df, order, 2]；不存在的帧按 0 处理。"""
+    """Per bin, an order-tap complex FIR over time: Y[t] = sum_k W[t,k] * X[t + lookahead - k] (k = 0 ... order-1).
+    re/im: [B, F, nb_df] (the lowest nb_df bins of the noisy spectrum); coefs: [B, F, nb_df, order, 2]; missing frames count as 0."""
     f = ops.shape(re)[1]
     left, right = order - 1 - lookahead, lookahead
     assert left >= 0, "df_order 必须 > lookahead"

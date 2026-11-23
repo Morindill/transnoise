@@ -7,7 +7,7 @@ from ..paths import ROOT
 
 @dataclass(frozen=True)
 class ModelConfig:
-    """模型超参，取值全部来自 configs/model.toml（这里不设默认值，避免两处不一致）。"""
+    """Model hyperparameters; every value comes from configs/model.toml (no defaults here, so the two cannot disagree)."""
 
     # frontend
     sr: int
@@ -34,12 +34,12 @@ class ModelConfig:
 
     @property
     def bulk_delay_ms(self) -> float:
-        """流式输出相对输入的整体延迟（评测里互相关测到的就是它）：(前视 + 1) 帧。"""
+        """Overall delay of the streaming output relative to the input (what the evaluation's cross-correlation measures): (lookahead + 1) frames."""
         return (self.lookahead + 1) * self.hop / self.sr * 1000
 
     @property
     def latency_ms(self) -> float:
-        """最坏算法延迟：一个样本从进入到能输出，最多等 (前视 + 2) 帧 = STFT 窗 + 前视。"""
+        """Worst-case algorithmic delay: a sample waits at most (lookahead + 2) frames = STFT window + lookahead before it can be output."""
         return (self.lookahead + 2) * self.hop / self.sr * 1000
 
     @classmethod
@@ -47,3 +47,8 @@ class ModelConfig:
         with path.open("rb") as f:
             t = tomllib.load(f)
         return cls(**t["frontend"], **t["transformer"], df_order=t["deep_filter"]["order"])
+
+    @classmethod
+    def from_checkpoint(cls, ckpt: Path) -> "ModelConfig":
+        """The model hyperparameter snapshot saved in the run directory at training time; it matches the checkpoint's weight shapes."""
+        return cls.load(ckpt.parent / "config_model.toml")

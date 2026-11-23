@@ -17,16 +17,16 @@ dependencies = [
 transnoise = "transnoise.cli:main"
 
 [tool.uv]
-default-groups = ["eval", "eval-pesq"]  # 直接 uv sync 就装齐；单独 uv sync --group eval 会把 pesq 当成多余的包卸掉
+default-groups = ["eval", "eval-pesq"]  # a plain uv sync installs everything; uv sync --group eval alone would uninstall pesq as an extra package
 
 [dependency-groups]
-# 评测核心：只用 numpy 系的库 + onnxruntime（DNSMOS），不装任何深度学习框架
-# 用 GPU 版（与 CPU 版互斥）；[cuda,cudnn] 自带 CUDA 13 / cuDNN 9 运行库，系统只需 NVIDIA 驱动（已有，CUDA 13.5）
+# Evaluation core: numpy-based libraries + onnxruntime (DNSMOS), no deep-learning framework
+# The GPU build (mutually exclusive with the CPU build); [cuda,cudnn] ships the CUDA 13 / cuDNN 9 runtime libraries, so the system only needs the NVIDIA driver
 eval = [
     "onnxruntime-gpu[cuda,cudnn]>=1.27",
     "pystoi>=0.4",
 ]
-# PESQ 只有源码包，需要 C 编译器（sudo apt install build-essential）；没装时评测的 PESQ 列记为 NaN（并打印警告）
+# PESQ is source-only and needs a C compiler (sudo apt install build-essential); without it the evaluation records PESQ as NaN (and prints a warning)
 eval-pesq = [
     "pesq>=0.0.4",
 ]

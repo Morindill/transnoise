@@ -1,5 +1,5 @@
-// 固定长度 FFT_N = tn::FFT 的复数 FFT（混合基数 2/3/4/5，递归 DIT，twiddle 查表）。构造时一次性算好表，之后不分配内存。
-// 实数输入也当复数处理（虚部为 0）。
+// Complex FFT of the fixed length tn::FFT (mixed radix 2/3/4/5, recursive DIT, table-driven twiddles). The tables are computed once at construction and no memory is allocated afterwards.
+// Real input is treated as complex (imaginary part 0).
 #pragma once
 #include <cmath>
 #include <stdexcept>
@@ -8,7 +8,7 @@
 
 namespace tn {
 
-inline constexpr double kPi = 3.14159265358979323846;  // MSVC 默认没有 M_PI，所以不用它
+inline constexpr double kPi = 3.14159265358979323846;  // MSVC has no M_PI by default, so it is not used
 
 struct cf {
   float re, im;
@@ -33,7 +33,7 @@ class Fft {
     if (n != 1) throw std::runtime_error("FFT 长度只支持 2/3/5 的因子");
   }
 
-  // out = DFT(in)，in/out 不能重叠
+  // out = DFT(in); in and out must not overlap
   void forward(const cf* in, cf* out) const { rec(in, out, N, 1, 0); }
 
  private:

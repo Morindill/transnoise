@@ -17,8 +17,8 @@ TransnoiseProcessor::TransnoiseProcessor()
                                              static_cast<size_t>(BinaryData::weights_binSize));
     model_ok_ = true;
   } catch (const std::exception& e) {
-    juce::ignoreUnused(e);  // Release 里 DBG 是空的
-    DBG("Transnoise：权重加载失败：" << e.what());  // 插件直通，不崩溃
+    juce::ignoreUnused(e);  // DBG is empty in Release
+    DBG("Transnoise：权重加载失败：" << e.what());  // the plugin passes audio through instead of crashing
   }
 }
 
@@ -44,13 +44,13 @@ void TransnoiseProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock
     for (int c = 0; c < getTotalNumInputChannels(); ++c) {
       Channel s;
       s.model = std::make_unique<tn::Denoiser>(*weights_);
-      s.adapter = std::make_unique<tn::BlockAdapter>(*s.model, /*fixed_block=*/0, kChunk);  // 块大小不固定：用最坏情况延迟，分段调用也安全
+      s.adapter = std::make_unique<tn::BlockAdapter>(*s.model, /*fixed_block=*/0, kChunk);  // variable block size: use the worst-case latency, so chunked calls are safe too
       latency_ = s.adapter->latency();
       s.ring.assign(static_cast<size_t>(latency_ + kChunk + 1), 0.0f);
       ch_.push_back(std::move(s));
     }
   }
-  setLatencySamples(latency_);  // 采样率不对或模型没加载时是 0：插件直通
+  setLatencySamples(latency_);  // 0 when the sample rate is wrong or the model failed to load: the plugin passes audio through
   wet_.assign(kChunk, 0.0f);
   dry_.assign(kChunk, 0.0f);
   gains_.assign(kChunk, 0.0f);
@@ -60,7 +60,7 @@ void TransnoiseProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock
 
 void TransnoiseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
   juce::ScopedNoDenormals noDenormals;
-  if (ch_.empty()) return;  // 直通
+  if (ch_.empty()) return;  // pass-through
   const int n = buffer.getNumSamples();
   const int nch = std::min(buffer.getNumChannels(), static_cast<int>(ch_.size()));
   mix_.setTargetValue(bypass_->get() ? 0.0f : mix_param_->load());
@@ -72,7 +72,7 @@ void TransnoiseProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
       float* x = buffer.getWritePointer(c) + pos;
       Channel& s = ch_[static_cast<size_t>(c)];
       const int cap = static_cast<int>(s.ring.size());
-      for (int i = 0; i < m; ++i) {  // 干声进延迟线，取出 latency_ 个样本之前的
+      for (int i = 0; i < m; ++i) {  // the dry signal goes into the delay line; read back the sample from latency_ samples ago
         s.ring[static_cast<size_t>(s.w)] = x[i];
         int r = s.w - latency_;
         if (r < 0) r += cap;

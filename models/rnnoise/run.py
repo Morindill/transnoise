@@ -1,6 +1,6 @@
-"""一次性工具（在 models/rnnoise 的 .venv 里运行）：用 RNNoise 增强一个目录里的所有 wav。
-用法：models/rnnoise/.venv/bin/python models/rnnoise/run.py --in 带噪目录 --out 输出目录
-每个文件用新的 RNNoise 实例（状态清零）。结束时打印一行耗时（仅供参考，不进评测）。"""
+"""One-off tool (run inside models/rnnoise's .venv): enhance every wav in a directory with RNNoise.
+Usage: models/rnnoise/.venv/bin/python models/rnnoise/run.py --in <noisy dir> --out <output dir>
+Each file gets a fresh RNNoise instance (state reset). Prints one timing line at the end (for reference only, not part of the evaluation)."""
 
 import argparse
 import os

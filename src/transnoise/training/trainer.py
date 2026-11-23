@@ -1,8 +1,9 @@
-"""训练核心：一步训练（含 NaN 保护和 EMA）、评估、断点存档/恢复。训练步用 tf.GradientTape（后端固定为 TensorFlow，和 train 环境一致），
-模型和损失只用 keras.ops。数据由调用方提供：noisy/clean [B, T] 48kHz、cutoff_hz [B]（干净语音的带宽，用于损失掩码）。
+"""Training core: one training step (with NaN protection and EMA), evaluation, checkpoint save/restore. The training step uses
+tf.GradientTape (the backend is fixed to TensorFlow, matching the train environment); the model and loss use keras.ops only.
+Data is supplied by the caller: noisy/clean [B, T] at 48 kHz, cutoff_hz [B] (bandwidth of the clean speech, used for the loss mask).
 
-NaN 保护：损失或梯度范数不是有限值时，这一步整个跳过（权重、优化器状态、EMA、迭代数都不动），返回 skipped=True；
-连续跳过多少步后回滚到检查点由训练循环决定。
+NaN protection: when the loss or gradient norm is not finite, the whole step is skipped (weights, optimizer state, EMA and
+iteration count are untouched) and skipped=True is returned; how many consecutive skips trigger a rollback to a checkpoint is decided by the training loop.
 """
 
 from contextlib import contextmanager
@@ -20,7 +21,7 @@ from .optim import make_optimizer
 
 
 def setup_gpu() -> None:
-    """显存按需增长（默认 TF 会一口气占满）。必须在第一次使用 GPU 之前调用。"""
+    """Grow GPU memory on demand (TF grabs it all at once by default). Must be called before the GPU is first used."""
     for g in tf.config.list_physical_devices("GPU"):
         tf.config.experimental.set_memory_growth(g, True)
 
@@ -30,9 +31,9 @@ class Trainer:
         keras.utils.set_random_seed(cfg.seed)
         self.model, self.cfg, self.run_dir = model, cfg, run_dir or cfg.run_dir
         self.loss_fn, self.optimizer = SpectralLoss(cfg, model.cfg.sr), make_optimizer(cfg)
-        t = int(round(cfg.crop_seconds * model.cfg.sr / model.cfg.hop)) * model.cfg.hop  # 片段长度取 hop 的整数倍
+        t = int(round(cfg.crop_seconds * model.cfg.sr / model.cfg.hop)) * model.cfg.hop  # segment length is a multiple of hop
         self.samples = t
-        model(np.zeros((1, t), "float32"))  # 建好所有权重
+        model(np.zeros((1, t), "float32"))  # build all weights
         self.optimizer.build(model.trainable_variables)
         self.ema = [tf.Variable(keras.ops.convert_to_numpy(w), trainable=False) for w in model.weights]
         sig = [tf.TensorSpec([None, t], tf.float32), tf.TensorSpec([None, t], tf.float32), tf.TensorSpec([None], tf.float32)]
@@ -79,7 +80,7 @@ class Trainer:
 
     @contextmanager
     def ema_weights(self):
-        """临时把模型权重换成 EMA 权重（评估、导出用），退出时换回。"""
+        """Temporarily swap the model weights for the EMA weights (for evaluation and export); swapped back on exit."""
         backup = [keras.ops.convert_to_numpy(w) for w in self.model.weights]
         for w, e in zip(self.model.weights, self.ema):
             w.assign(e)
@@ -90,7 +91,7 @@ class Trainer:
                 w.assign(b)
 
     def evaluate(self, batches) -> float:
-        """batches: 可迭代，每项 (noisy, clean, cutoff_hz)；返回按条数加权的平均损失（用当前模型权重）。"""
+        """batches: an iterable of (noisy, clean, cutoff_hz); returns the mean loss weighted by clip count (with the current model weights)."""
         total = n = 0.0
         for noisy, clean, cutoff in batches:
             loss, _ = self._eval(noisy, clean, cutoff)
@@ -101,6 +102,6 @@ class Trainer:
         return checkpoint.save(self.run_dir, self.step, self.model, self.optimizer, self.ema, extra, self.cfg.keep_last, name)
 
     def resume(self, path: Path | None = None) -> dict | None:
-        """从 path（默认最新的）恢复；没有检查点返回 None。返回 meta（meta["extra"] 是当时存的训练循环状态）。"""
+        """Restore from path (the latest by default); returns None when there is no checkpoint. Returns meta (meta["extra"] is the training-loop state stored then)."""
         path = path or checkpoint.latest(self.run_dir)
         return checkpoint.load(path, self.model, self.optimizer, self.ema) if path else None

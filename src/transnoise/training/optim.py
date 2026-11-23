@@ -1,4 +1,5 @@
-"""AdamW + 线性预热 → 余弦退火。学习率是 optimizer.iterations 的函数，所以恢复检查点（optimizer 状态含迭代数）后进度自动接上。"""
+"""AdamW + linear warmup -> cosine decay. The learning rate is a function of optimizer.iterations, so after restoring a
+checkpoint (the optimizer state includes the iteration count) the schedule resumes where it left off."""
 
 import keras
 from keras import ops
@@ -23,5 +24,5 @@ def make_optimizer(cfg: TrainConfig) -> keras.optimizers.AdamW:
     opt = keras.optimizers.AdamW(
         learning_rate=WarmupCosine(cfg.peak_lr, cfg.min_lr, cfg.warmup_steps, cfg.total_steps),
         weight_decay=cfg.weight_decay, beta_2=cfg.beta2, global_clipnorm=cfg.clip_norm)
-    opt.exclude_from_weight_decay(var_names=["bias", "gamma", "beta", "rel_bias"])  # 偏置、LayerNorm、相对位置偏置不衰减
+    opt.exclude_from_weight_decay(var_names=["bias", "gamma", "beta", "rel_bias"])  # no decay on biases, LayerNorm, relative position bias
     return opt

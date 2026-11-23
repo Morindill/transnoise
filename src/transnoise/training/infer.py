@@ -1,17 +1,15 @@
-"""推理工具：用检查点增强一个目录里的所有 wav，输出可以直接给评测打分。
-  uv run transnoise infer --ckpt data/checkpoints/baseline --in 带噪目录 --out 输出目录
+"""Inference tool: enhance every wav in a directory with a checkpoint; the output can be scored by the evaluation directly.
+  uv run transnoise infer --ckpt data/checkpoints/baseline --in <noisy dir> --out <output dir>
 
---ckpt 可以是运行目录（取 latest）、运行目录/best、或某个 step_XXXXXXXX。默认用 EMA 权重，--raw 用原始权重。
-模型结构取自运行目录里的 config_model.toml 快照（没有就用 configs/model.toml）。
-离线整段处理：输出和输入时间对齐（没有流式延迟）；输入需要 48kHz 单声道 wav。输出 48kHz 单声道 PCM16，文件名不变。
-然后打分：uv run transnoise eval score noise <输出目录> --name 名字
+--ckpt can be a run directory (uses latest), <run directory>/best, or a specific step_XXXXXXXX. EMA weights by default; --raw uses the raw weights.
+The model architecture comes from the config_model.toml snapshot in the run directory (saved at training time).
+Whole-clip offline processing: the output is time-aligned with the input (no streaming delay); input must be 48 kHz mono wav. Output is 48 kHz mono PCM16 with the same file names.
+Then score it: uv run transnoise eval score noise <output dir> --name <name>
 """
 
 import argparse
 import time
 from pathlib import Path
-
-from ..paths import ROOT
 
 
 def resolve(path: Path) -> Path:
@@ -44,9 +42,8 @@ def main() -> None:
 
     setup_gpu()
     ckpt = resolve(Path(a.ckpt))
-    snap = ckpt.parent / "config_model.toml"
-    model = Denoiser(ModelConfig.load(snap if snap.exists() else ROOT / "configs" / "model.toml"))
-    model(np.zeros((1, 48000), "float32"))  # 建好权重
+    model = Denoiser(ModelConfig.from_checkpoint(ckpt))
+    model(np.zeros((1, 48000), "float32"))  # build the weights
     meta = checkpoint.load_weights(ckpt, model, ema=not a.raw)
     print(f"检查点 {ckpt}（step {meta['step']}，{'原始' if a.raw else 'EMA'}权重）")
 

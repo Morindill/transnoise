@@ -1,7 +1,7 @@
-// 命令行：用 C++ 核心（经 BlockAdapter 中间件）增强一个目录里的所有 wav，输出和输入时间对齐、等长，可以直接给评测打分。
-//   tn_wav --weights gen/weights.bin --in 带噪目录 --out 输出目录 [--block 480] [--limit N]
-// --block 模拟宿主块大小（默认 480；0 = 块大小不固定的最坏情况延迟）。输出是 PCM16 单声道 48kHz，文件名不变。
-// 然后打分：uv run transnoise eval score noise <输出目录> --name 名字
+// Command line: enhance every wav in a directory with the C++ core (through the BlockAdapter middleware); the output is time-aligned with the input and of equal length, so the evaluation can score it directly.
+//   tn_wav --weights gen/weights.bin --in <noisy dir> --out <output dir> [--block 480] [--limit N]
+// --block simulates the host block size (default 480; 0 = worst-case latency for variable block sizes). Output is PCM16 mono 48 kHz with unchanged file names.
+// Then score it: uv run transnoise eval score noise <output dir> --name <name>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
       if (a.sr != tn::SR || a.channels != 1) throw std::runtime_error(p.string() + "：需要 48kHz 单声道");
       const size_t n = a.x.size();
       std::vector<float> x(a.x), y(n + lat + chunk, 0.f);
-      x.resize(n + lat + chunk, 0.f);  // 后面补零，把延迟的尾巴冲出来
+      x.resize(n + lat + chunk, 0.f);  // pad with zeros at the end to flush out the delayed tail
       ad.reset();
       const auto t0 = std::chrono::steady_clock::now();
       for (size_t pos = 0; pos < n + lat; pos += chunk) ad.process(x.data() + pos, y.data() + pos, chunk);

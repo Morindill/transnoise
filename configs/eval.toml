@@ -1,17 +1,17 @@
-# 评测配置：只管测试集、指标和资源位置。评测的输入输出是固定的——
-#   输入 = 测试集 + 一个增强后的 wav 目录（48kHz 单声道，文件名 <id>.wav），输出 = 每条一行的分数。
-# 评测不知道 wav 是哪个模型产生的；各模型的推理工具在 models/<名>/run.py，是一次性工具，不属于评测。
+# Evaluation configuration: only test sets, metrics and resource locations. The evaluation interface is fixed:
+#   input = a test set + a directory of enhanced wavs (48 kHz mono, files named <id>.wav), output = one row of scores per clip.
+# The evaluation does not know which model produced the wavs; each model's inference tool is models/<name>/run.py, a one-off tool that is not part of the evaluation.
 
 [assets]
-dnsmos_p835 = "data/eval/assets/dnsmos/sig_bak_ovr.onnx"   # DNSMOS P.835（SIG/BAK/OVRL），只需 onnxruntime
+dnsmos_p835 = "data/eval/assets/dnsmos/sig_bak_ovr.onnx"   # DNSMOS P.835 (SIG/BAK/OVRL), needs onnxruntime only
 
 [metrics]
-metric_sr = 16000           # PESQ、STOI、DNSMOS 都在 16kHz 上算；SI-SDR 在 48kHz 上算
-max_lag_ms = 500            # 估计模型延迟时的搜索范围（互相关）；所有模型统一"自己对齐"，不用模型内部的延迟补偿
+metric_sr = 16000           # PESQ, STOI and DNSMOS are all computed at 16 kHz; SI-SDR at 48 kHz
+max_lag_ms = 500            # search range (cross-correlation) when estimating a model's delay; every model "aligns itself", no model-internal delay compensation is used
 
-# 测试集：只用 index 里 split=test 的语音/噪声/RIR，固定种子，生成一次后不再变。
-# 语音按"来源"轮流抽（每个来源数量接近），方便报告时按来源切片；SNR 在 snrs 里循环分配，每档数量相同。
-# SNR 按整段功率计算。reverb=true 时先把语音和 RIR 卷积，参考信号是"带混响的干净语音"（只评估去噪，不评估去混响）。
+# Test sets: use only the speech/noise/RIRs with split=test in the index, a fixed seed, generated once and never changed afterwards.
+# Speech is drawn round-robin by "source" (a similar number per source) so reports can be sliced by source; SNRs cycle through snrs, so every level gets the same count.
+# SNR is computed over the whole-segment power. With reverb=true, speech is first convolved with an RIR and the reference is "reverberant clean speech" (only denoising is evaluated, not dereverberation).
 [testsets.noise]
 reverb = false
 n_per_lang = 300

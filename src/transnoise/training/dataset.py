@@ -1,10 +1,12 @@
-"""训练数据：在线混合。不依赖 TensorFlow/Keras（数据进程只 import numpy 和 soundfile）。
+"""Training data: online mixing. Does not depend on TensorFlow/Keras (the data processes import only numpy and soundfile).
 
-为什么在线做、不放进 data_pipeline：data_pipeline 只产出"干净的原子素材"（48kHz 单声道 FLAC + index），
-而 语音 × 噪声 × RIR × SNR × 电平 的组合是无穷的，预先混好既占几百 GB，又把组合固定死，丢掉了随机增强。
-混合运算本身（SNR 缩放、混响、防削波）在 transnoise/mixing.py，评测的固定测试集用的是同一份。
+Why online and not part of data_pipeline: data_pipeline only produces clean atomic material (48 kHz mono FLAC + index),
+while the combinations speech x noise x RIR x SNR x level are endless; pre-mixing them would take hundreds of GB, freeze
+the combinations and lose the random augmentation.
+The mixing arithmetic itself (SNR scaling, reverb, anti-clipping) lives in transnoise/mixing.py; the fixed evaluation test sets use the same code.
 
-可复现：第 step 个 batch 完全由 (seed, step) 决定。所以断点续训只需要记住"已训练到第几步"，不用存索引或采样器状态。
+Reproducible: batch number step is fully determined by (seed, step). So resuming only needs to remember how many steps were
+trained; no index or sampler state is stored.
 """
 
 import json
@@ -19,7 +21,7 @@ from ..mixing import mix, reverberate
 from ..paths import DATA, INDEX, SR
 from .config import TrainConfig
 
-MIN_SPEECH_RMS = 10 ** (-60 / 20)  # 裁出来的语音片段低于 -60 dBFS 视为静音，换一段
+MIN_SPEECH_RMS = 10 ** (-60 / 20)  # a cropped speech segment below -60 dBFS counts as silence; draw another one
 MIN_NOISE_RMS = 1e-4
 
 
@@ -28,19 +30,20 @@ def _rms(x: np.ndarray) -> float:
 
 
 class Index:
-    """index/<split>.jsonl 压成 numpy 数组（路径存成 bytes）。40 万行用 Python 对象会很占内存，每个数据进程还各复制一份。"""
+    """index/<split>.jsonl packed into numpy arrays (paths stored as bytes). 400k rows as Python objects would take a lot of memory, and every data process holds its own copy."""
 
     def __init__(self, split: str):
         rows = [json.loads(line) for line in (INDEX / f"{split}.jsonl").open()]
         speech = [r for r in rows if r["role"] == "speech"]
         self.speech_path = np.array([r["path"] for r in speech], dtype="S")
         self.speech_bw = np.array([r["bandwidth_hz"] or SR / 2 for r in speech], dtype="float32")
-        # 噪声：所有来源并成一个集合，按文件时长加权抽文件（等价于在全部噪声音频的时间轴上均匀抽），来源不参与抽样
+        # Noise: all sources form one pool, files are drawn weighted by duration (equivalent to sampling uniformly along the
+        # time axis of all noise audio); the source takes no part in sampling
         noise = [r for r in rows if r["role"] == "noise"]
         self.noise_path = np.array([r["path"] for r in noise], dtype="S")
         dur = np.array([r["duration"] for r in noise], dtype="float64")
         self.noise_cdf = np.cumsum(dur) / dur.sum() if len(noise) else dur
-        # RIR 按来源分组：先均匀选来源再选文件（各来源的文件数悬殊，直接按文件抽会被大来源淹没）
+        # RIRs are grouped by source: pick a source uniformly, then a file (file counts differ wildly across sources; drawing by file would be swamped by the big one)
         self.rir = [np.array([r["path"] for r in rows if r["role"] == "rir" and r["source"] == s], dtype="S")
                     for s in sorted({r["source"] for r in rows if r["role"] == "rir"})]
         assert len(speech) and len(noise) and self.rir, f"{split}: 缺语音/噪声/RIR"
@@ -51,7 +54,7 @@ class BatchSource:
         self.cfg, self.idx = cfg, Index(split)
         self.seed = cfg.seed if seed is None else seed
 
-    # ---- 单个素材 ----
+    # ---- single clips ----
     def _speech(self, rng, n: int) -> tuple[np.ndarray, float]:
         for _ in range(5):
             i = int(rng.integers(len(self.idx.speech_path)))
@@ -59,7 +62,7 @@ class BatchSource:
                 if len(f) >= n:
                     f.seek(int(rng.integers(len(f) - n + 1)))
                     x = f.read(n, dtype="float32")
-                else:  # 比片段短：放在随机位置，其余是静音（训练里也需要"只有噪声"的段落）
+                else:  # shorter than the segment: place at a random position, the rest is silence (training also needs noise-only stretches)
                     short = f.read(dtype="float32")
                     x = np.zeros(n, "float32")
                     o = int(rng.integers(n - len(short) + 1))
@@ -76,7 +79,7 @@ class BatchSource:
                     f.seek(int(rng.integers(len(f) - n + 1)))
                     x = f.read(n, dtype="float32")
                 else:
-                    x = np.resize(f.read(dtype="float32"), n)  # 比片段短：循环拼接
+                    x = np.resize(f.read(dtype="float32"), n)  # shorter than the segment: tile it
             if _rms(x) > MIN_NOISE_RMS:
                 break
         return x
@@ -86,20 +89,45 @@ class BatchSource:
         rir, _ = sf.read(DATA / pool[int(rng.integers(len(pool)))].decode(), dtype="float32")
         return rir if rir.ndim == 1 else rir[:, 0]
 
-    # ---- 样本 / batch ----
+    # ---- samples / batches ----
+    def _kind(self, rng) -> str:
+        u, c = rng.random(), self.cfg
+        if u < c.p_silence:
+            return "silence"
+        if u < c.p_silence + c.p_noise_only:
+            return "noise_only"
+        if u < c.p_silence + c.p_noise_only + c.p_clean:
+            return "clean_only"
+        return "mixed"
+
     def sample(self, rng) -> tuple[np.ndarray, np.ndarray, float, dict]:
+        """One (noisy, target, cutoff frequency, info). Kinds: mixed = speech + noise; noise_only = noise alone, target all zeros;
+        clean_only = clean speech alone, target = input; silence = all zeros. Samples without speech have no bandwidth information, so the cutoff is the full band."""
         c, n = self.cfg, self.cfg.samples
+        kind = self._kind(rng)
+        if kind == "silence":
+            z = np.zeros(n, "float32")
+            return z, z, SR / 2, {"kind": kind, "reverb": False}
+        level = rng.uniform(c.speech_db_min, c.speech_db_max)  # level of the clean speech; in noise_only the noise level = level - snr
+        snr = float(rng.uniform(c.snr_min, c.snr_max))
+        if kind == "noise_only":
+            noise = self._noise(rng, n)
+            noise *= 10 ** ((level - snr) / 20) / (_rms(noise) + 1e-8)
+            noise *= min(1.0, 0.95 / np.abs(noise).max())
+            return noise, np.zeros(n, "float32"), SR / 2, {"kind": kind, "snr_db": snr, "reverb": False}
         clean, bw = self._speech(rng, n)
         reverb = bool(rng.random() < c.p_reverb)
         if reverb:
-            clean = reverberate(clean, self._rir(rng))  # 目标 = 带混响的干净语音
-        clean *= 10 ** (rng.uniform(c.speech_db_min, c.speech_db_max) / 20) / (_rms(clean) + 1e-8)
-        snr = float(rng.uniform(c.snr_min, c.snr_max))
+            clean = reverberate(clean, self._rir(rng))  # target = reverberant clean speech
+        clean *= 10 ** (level / 20) / (_rms(clean) + 1e-8)
+        if kind == "clean_only":
+            clean *= min(1.0, 0.95 / np.abs(clean).max())
+            return clean, clean, bw, {"kind": kind, "reverb": reverb}
         noisy, clean = mix(clean, self._noise(rng, n), snr)
-        return noisy.astype("float32"), clean.astype("float32"), bw, {"snr_db": snr, "reverb": reverb}
+        return noisy.astype("float32"), clean.astype("float32"), bw, {"kind": kind, "snr_db": snr, "reverb": reverb}
 
     def batch(self, step: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """第 step 个 batch：(noisy [B,T], clean [B,T], cutoff_hz [B])。只由 (seed, step) 决定。"""
+        """Batch number step: (noisy [B,T], clean [B,T], cutoff_hz [B]). Determined by (seed, step) alone."""
         rng = np.random.default_rng([self.seed, step])
         parts = [self.sample(rng) for _ in range(self.cfg.batch_size)]
         return (np.stack([p[0] for p in parts]), np.stack([p[1] for p in parts]),
@@ -119,8 +147,8 @@ def _work(step: int):
 
 
 class Loader:
-    """多进程预取：每个 batch 由一个数据进程整个做完，按 step 顺序依次返回，始终提前准备 prefetch 个。
-    start 是起始 step，所以断点续训时从检查点的 step 接着取就行。用 spawn 启动数据进程，避免 fork 出带着 TF/GPU 状态的子进程。"""
+    """Multiprocess prefetch: each batch is produced entirely by one data process and returned in step order, always keeping prefetch batches ready.
+    start is the starting step, so resuming simply continues from the checkpoint's step. Data processes are started with spawn to avoid forking children that carry TF/GPU state."""
 
     def __init__(self, src: BatchSource, start: int = 0, workers: int = 12, prefetch: int = 8):
         self.pool = ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn"), initializer=_init, initargs=(src,))

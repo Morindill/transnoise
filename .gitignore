@@ -12,12 +12,15 @@ wheels/
 # Data
 data/
 
-# 临时脚本和中间产物（一律放在这里，不放 /tmp 或工程目录之外）
+# Temporary scripts and intermediate artifacts (always put them here, never in /tmp or outside the project directory)
 scratch/
 
-# Eval models: per-model envs and downloaded binaries/weights
+# Baseline models used by the evaluation: per-model environments and downloaded binaries/weights
 models/*/.venv/
 models/dfn3/bin/
 models/dfn3/*.tar.gz
 models/*/checkpoints/
 train/.venv/
+
+# C++ cross-check fixture: regenerated from the weights (deploy.fixture), not kept in the repository
+cpp/gen/fixture.bin

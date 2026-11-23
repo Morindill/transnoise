@@ -1,9 +1,10 @@
-"""把检查点导出成部署用的权重文件（只在 train 环境里运行：要建 Keras 模型来读权重）。
-  uv run transnoise export --ckpt data/checkpoints/<名>/best [--out 文件] [--raw]
+"""Export a checkpoint as deployment weights (runs only in the train environment: a Keras model has to be built to read the weights).
+  uv run transnoise export --ckpt data/checkpoints/<name>/best [--out FILE] [--raw]
 
-输出一个 npz：每个张量一个有名字的数组（blocks.0.attn.qkv.kernel …），加上 meta（JSON：全部模型超参 + ERB 频带宽度）、
-window（Vorbis 窗）和每个 LayerNorm 的 eps。名字由代码结构决定，不依赖 Keras 自动编号，numpy 参考实现和 C++ 都按名字取。
-默认用 EMA 权重（和 infer 一致）。LayerNorm 的 eps、GELU 的精确形式（erf）都以 Keras 实际行为为准，这里把 eps 一并导出。
+Writes one npz: a named array per tensor (blocks.0.attn.qkv.kernel ...), plus meta (JSON: all model hyperparameters + ERB band widths),
+window (the Vorbis window) and the eps of every LayerNorm. Names are determined by the code structure, independent of Keras auto-numbering;
+the numpy reference and the C++ code both look tensors up by name.
+EMA weights by default (same as infer). LayerNorm's eps and GELU's exact form (erf) follow Keras's actual behavior; the eps is exported along with the weights.
 """
 
 import argparse
@@ -13,11 +14,11 @@ from pathlib import Path
 
 import numpy as np
 
-from ..paths import DATA, ROOT
+from ..paths import DATA
 
 
 def collect(model) -> dict[str, np.ndarray]:
-    """按结构（不是按变量顺序）收集全部权重。"""
+    """Collect all weights by structure (not by variable order)."""
     import keras
 
     to_np = keras.ops.convert_to_numpy
@@ -29,7 +30,7 @@ def collect(model) -> dict[str, np.ndarray]:
     def norm(name, layer):
         out[f"{name}.gamma"], out[f"{name}.beta"] = to_np(layer.gamma), to_np(layer.beta)
         out[f"{name}.eps"] = np.array(layer.epsilon, "float32")
-        assert layer.axis in (-1, [-1], (-1,), [2], (2,)), layer.axis  # 只支持在最后一维上做
+        assert layer.axis in (-1, [-1], (-1,), [2], (2,)), layer.axis  # only normalization over the last axis is supported
         assert layer.center and layer.scale
 
     dense("erb_in", model.erb_in)
@@ -46,8 +47,7 @@ def collect(model) -> dict[str, np.ndarray]:
         dense(f"{p}.ff2", b.ff2)
     norm("norm_out", model.norm_out)
     dense("gain", model.gain_head.fc)
-    if model.df_head is not None:
-        dense("df", model.df_head.fc)
+    dense("df", model.df_head.fc)
     return out
 
 
@@ -61,10 +61,9 @@ def export(ckpt: Path, out_path: Path, ema: bool = True) -> dict:
     from ..training.infer import resolve
 
     ckpt = resolve(ckpt)
-    snap = ckpt.parent / "config_model.toml"
-    cfg = ModelConfig.load(snap if snap.exists() else ROOT / "configs" / "model.toml")
+    cfg = ModelConfig.from_checkpoint(ckpt)
     model = Denoiser(cfg)
-    model(np.zeros((1, cfg.hop * 8), "float32"))  # 建好权重
+    model(np.zeros((1, cfg.hop * 8), "float32"))  # build the weights
     meta = checkpoint.load_weights(ckpt, model, ema=ema)
 
     arrays = collect(model)

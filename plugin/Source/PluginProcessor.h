@@ -6,9 +6,9 @@
 
 #include "tn/stream_adapter.h"
 
-// 降噪插件：每个声道一个模型实例（共用一份权重），经 BlockAdapter 把任意宿主块大小接到模型的 10 ms 帧上。
-// 参数：Mix（干湿，0–100%）、Bypass。干声按插件延迟对齐，所以 Mix 和 Bypass 都不会引入相位/时间错位。
-// 只支持 48 kHz：其它采样率下插件直通（不处理，也不报延迟）。
+// Denoising plugin: one model instance per channel (sharing one set of weights); a BlockAdapter connects any host block size to the model's 10 ms frames.
+// Parameters: Mix (dry/wet, 0-100%) and Bypass. The dry signal is aligned to the plugin latency, so neither Mix nor Bypass introduces a phase/time misalignment.
+// 48 kHz only: at other sample rates the plugin passes audio through (no processing, no latency reported).
 class TransnoiseProcessor : public juce::AudioProcessor {
  public:
   TransnoiseProcessor();
@@ -17,7 +17,7 @@ class TransnoiseProcessor : public juce::AudioProcessor {
   void releaseResources() override {}
   bool isBusesLayoutSupported(const BusesLayout& layouts) const override;
   void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
-  void processBlockBypassed(juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock(b, m); }  // 旁通也要走延迟对齐
+  void processBlockBypassed(juce::AudioBuffer<float>& b, juce::MidiBuffer& m) override { processBlock(b, m); }  // bypass must go through the delay alignment too
 
   juce::AudioProcessorEditor* createEditor() override;
   bool hasEditor() const override { return true; }
@@ -40,11 +40,11 @@ class TransnoiseProcessor : public juce::AudioProcessor {
   struct Channel {
     std::unique_ptr<tn::Denoiser> model;
     std::unique_ptr<tn::BlockAdapter> adapter;
-    std::vector<float> ring;  // 干声延迟线
+    std::vector<float> ring;  // dry-signal delay line
     int w = 0;
   };
 
-  static constexpr int kChunk = 2048;  // 一次最多处理这么多样本；宿主的块更大就分段（非固定块模式下分段不影响延迟）
+  static constexpr int kChunk = 2048;  // process at most this many samples at a time; larger host blocks are split (in variable-block mode splitting does not affect the latency)
 
   juce::AudioProcessorValueTreeState apvts_;
   juce::AudioParameterBool* bypass_ = nullptr;

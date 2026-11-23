@@ -1,4 +1,4 @@
-// 最小的 WAV 读写（命令行工具和测试用，不是实时路径）：读 PCM16 / PCM24 / PCM32 / float32，写 PCM16。
+// Minimal WAV reading and writing (for the command-line tool and tests, not the real-time path): reads PCM16 / PCM24 / PCM32 / float32, writes PCM16.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -13,7 +13,7 @@ namespace tn::wav {
 
 struct Audio {
   int sr = 0, channels = 0;
-  std::vector<float> x;  // 交错的采样
+  std::vector<float> x;  // interleaved samples
 };
 
 inline Audio read(const std::string& path) {
@@ -37,7 +37,7 @@ inline Audio read(const std::string& path) {
       a.sr = static_cast<int>(u32());
       u32(), u16();
       bits = u16();
-      if (fmt == 0xFFFE && size >= 26) {  // WAVE_FORMAT_EXTENSIBLE：真正的格式在子类型的前两个字节
+      if (fmt == 0xFFFE && size >= 26) {  // WAVE_FORMAT_EXTENSIBLE: the real format is in the first two bytes of the sub-format
         u16(), u16(), u32();
         fmt = u16();
         f.seekg(size - 26 + 14, std::ios::cur);
@@ -74,7 +74,7 @@ inline Audio read(const std::string& path) {
   throw std::runtime_error(path + "：没有 data 块");
 }
 
-// 单声道 PCM16（限幅，四舍五入，和 soundfile 写 PCM_16 的行为一致）
+// Mono PCM16 (clipped and rounded, matching how soundfile writes PCM_16)
 inline void write_pcm16(const std::string& path, const float* x, size_t n, int sr) {
   std::ofstream f(path, std::ios::binary);
   if (!f) throw std::runtime_error("打不开 " + path);

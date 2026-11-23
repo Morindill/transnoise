@@ -1,7 +1,7 @@
-"""一次性工具（在 models/mossformer2 的 .venv 里运行，必须以本目录为 cwd：权重路径 checkpoints/ 相对 cwd）：
-用 MossFormer2_SE_48K 增强一个目录里的所有 wav。
-用法：cd models/mossformer2 && .venv/bin/python run.py --in 带噪目录 --out 输出目录（用绝对路径）
-第一个文件先预热一次（不计时）。结束时打印一行耗时（仅供参考，不进评测）。"""
+"""One-off tool (run inside models/mossformer2's .venv, with this directory as cwd: the weight path checkpoints/ is relative to cwd):
+enhance every wav in a directory with MossFormer2_SE_48K.
+Usage: cd models/mossformer2 && .venv/bin/python run.py --in <noisy dir> --out <output dir> (use absolute paths)
+The first file is run once as a warm-up (not timed). Prints one timing line at the end (for reference only, not part of the evaluation)."""
 
 import argparse
 import time
@@ -20,7 +20,7 @@ a = p.parse_args()
 files = sorted(Path(a.src).glob("*.wav"))
 Path(a.out).mkdir(parents=True, exist_ok=True)
 cv = ClearVoice(task="speech_enhancement", model_names=["MossFormer2_SE_48K"])
-cv(input_path=str(files[0]), online_write=False)  # 预热
+cv(input_path=str(files[0]), online_write=False)  # warm-up
 total = audio = 0.0
 for f in files:
     t = time.perf_counter()

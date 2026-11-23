@@ -1,6 +1,6 @@
-"""一次性工具：用 DeepFilterNet3 预编译二进制增强一个目录里的所有 wav（只用标准库）。
-用法：python3 models/dfn3/run.py --in 带噪目录 --out 输出目录
-不加 -D（它会丢掉开头来补偿延迟，输出变短）、不加 --pf；延迟由评测统一测量并对齐。"""
+"""One-off tool: enhance every wav in a directory with the precompiled DeepFilterNet3 binary (standard library only).
+Usage: python3 models/dfn3/run.py --in <noisy dir> --out <output dir>
+No -D (it drops the beginning to compensate for the delay, which shortens the output) and no --pf; the delay is measured and aligned uniformly by the evaluation."""
 
 import argparse
 import subprocess
@@ -9,7 +9,7 @@ import wave
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CHUNK = 200  # 每次命令行最多带多少个文件
+CHUNK = 200  # maximum number of files per command line
 
 p = argparse.ArgumentParser()
 p.add_argument("--in", dest="src", required=True)

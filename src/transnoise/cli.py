@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .paths import DATA, MANIFESTS, ROOT
 
-# 在 train 环境里运行的命令：子命令名 → (说明, 底层命令)。参数原样传给底层命令
+# Commands run inside the train environment: subcommand name -> (description, underlying command). Arguments are passed through unchanged
 _TRAIN_ENV = {
     "train": ("训练（有检查点自动续训）", ("python", "-m", "transnoise.training.run")),
     "infer": ("用检查点增强一个目录的 wav", ("python", "-m", "transnoise.training.infer")),
@@ -14,11 +14,11 @@ _TRAIN_ENV = {
     "tensorboard": ("看训练曲线", ("tensorboard", "--logdir", str(DATA / "checkpoints"))),
 }
 _CHECKS = {"model": "check_model", "data": "check_data", "training": "check_training", "deploy": "check_deploy",
-           "batch": "measure_batch"}  # train/ 下的自检和实测脚本
+           "batch": "measure_batch"}  # self-check and measurement scripts under train/
 
 
 def _status() -> None:
-    agg = defaultdict(lambda: [0.0, 0, 0])  # 小时, 保留数, 丢弃数
+    agg = defaultdict(lambda: [0.0, 0, 0])  # hours, kept, dropped
     drops = defaultdict(int)
     for mf in sorted(MANIFESTS.glob("*.jsonl")):
         for line in mf.open():
@@ -48,11 +48,8 @@ def _add_data(sub: argparse._SubParsersAction) -> None:
         s.add_argument("names", nargs="+", choices=list(SOURCES), metavar="源", help="数据源名: " + ", ".join(SOURCES))
         if c == "download":
             s.add_argument("--conns", type=int, default=CFG["download"]["conns"], help="单个文件的并发连接数")
-            s.add_argument("--mirror", default="",
-                           help="OpenSLR 镜像：" + ", ".join(CFG["download"]["mirrors"]) + "，或直接给主机名")
         else:
             s.add_argument("--workers", type=int, help="解码/重采样进程数，默认见配置")
-            s.add_argument("--limit", type=int, help="只处理前 N 条，用于试跑")
             s.add_argument("--redo", action="store_true",
                            help="清空该源的 manifest、完成标记和 data/staged/<源>/ 后重新处理（raw 不动）")
     d.add_parser("status", help="按来源/语言/带宽/切分统计小时数")
@@ -68,11 +65,11 @@ def _run_data(a: argparse.Namespace) -> None:
     elif a.action == "download":
         from .data_pipeline.download import download
         for n in a.names:
-            download(SOURCES[n], a.conns, a.mirror)
+            download(SOURCES[n], a.conns)
     elif a.action == "stage":
         from .data_pipeline.stage import stage
         for n in a.names:
-            stage(SOURCES[n], a.workers, a.limit, a.redo)
+            stage(SOURCES[n], a.workers, a.redo)
     elif a.action == "status":
         _status()
     elif a.action == "index":
@@ -86,8 +83,6 @@ def _add_eval(sub: argparse._SubParsersAction) -> None:
     e = sub.add_parser("eval", help="评测").add_subparsers(dest="action", required=True)
     b = e.add_parser("build-testset", help="按 configs/eval.toml 合成测试集（固定种子，生成后不应改变）")
     b.add_argument("name", choices=list(CFG["testsets"]))
-    b.add_argument("--n", type=int, help="覆盖每种语言的条数（试跑用）")
-    b.add_argument("--as", dest="out_name", help="输出到另一个名字（试跑用，避免覆盖正式测试集）")
     b.add_argument("--force", action="store_true", help="已存在时删除重建")
     s = e.add_parser("score", help="给一个增强后的 wav 目录打分（输入：测试集 + 目录；输出：results.jsonl）")
     s.add_argument("testset")
@@ -104,7 +99,7 @@ def _add_eval(sub: argparse._SubParsersAction) -> None:
 def _run_eval(a: argparse.Namespace) -> None:
     if a.action == "build-testset":
         from .eval.testset import build
-        build(a.name, a.n, a.out_name, a.force)
+        build(a.name, a.force)
     elif a.action == "score":
         from .eval.scorer import score
         score(a.testset, a.enhanced, a.name, a.workers)
@@ -114,7 +109,7 @@ def _run_eval(a: argparse.Namespace) -> None:
 
 
 def _add_train_env(sub: argparse._SubParsersAction) -> None:
-    """只为 -h 的列表登记；这些子命令的参数不经过 argparse，在 main 里原样转给底层命令。"""
+    """Registered only so they appear in -h; these subcommands' arguments bypass argparse and main passes them to the underlying command unchanged."""
     for name, (help_, _) in _TRAIN_ENV.items():
         sub.add_parser(name, help=help_ + "（参数原样传给底层命令，加 -h 看它的用法）", add_help=False)
     sub.add_parser("check", help="train 环境里的自检和实测脚本：check {" + ",".join(_CHECKS) + "} [脚本参数]", add_help=False)

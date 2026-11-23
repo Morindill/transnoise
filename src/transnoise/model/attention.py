@@ -1,7 +1,8 @@
-"""滑动窗口自注意力 + Transformer 块。
+"""Sliding-window self-attention + Transformer block.
 
-每一帧 i 只看 [i-window, i+lookahead] 这些帧；位置信息用"相对偏移"的可学习偏置，不用绝对位置，
-所以训练长度和部署长度可以不同，流式时也不需要知道已经处理了多少帧。
+Frame i only attends to frames [i-window, i+lookahead]; position is encoded by a learnable bias on the relative offset
+instead of absolute positions, so the training and deployment lengths may differ and streaming does not need to know how
+many frames were processed.
 """
 
 import keras
@@ -17,7 +18,7 @@ class BandedSelfAttention(keras.layers.Layer):
         self.out = keras.layers.Dense(d_model)
 
     def build(self, input_shape):
-        # 每个头、每个相对偏移（-window … +lookahead）一个标量偏置
+        # one scalar bias per head and per relative offset (-window ... +lookahead)
         self.rel_bias = self.add_weight(name="rel_bias", shape=(self.h, self.window + self.lookahead + 1),
                                         initializer="zeros")
 
@@ -27,7 +28,7 @@ class BandedSelfAttention(keras.layers.Layer):
         q, k, v = (ops.transpose(ops.reshape(t, (-1, f, self.h, self.d // self.h)), (0, 2, 1, 3)) for t in (q, k, v))
         scores = ops.einsum("bhid,bhjd->bhij", q, k) / (self.d // self.h) ** 0.5
         pos = ops.arange(f)
-        off = pos[None, :] - pos[:, None]  # [F, F]，off[i, j] = j - i
+        off = pos[None, :] - pos[:, None]  # [F, F], off[i, j] = j - i
         allowed = (off >= -self.window) & (off <= self.lookahead)
         bias = ops.take(self.rel_bias, ops.clip(off + self.window, 0, self.window + self.lookahead), axis=1)  # [H,F,F]
         scores = ops.where(allowed[None, None], scores + bias[None], -1e9)
@@ -36,7 +37,7 @@ class BandedSelfAttention(keras.layers.Layer):
 
 
 class TransformerBlock(keras.layers.Layer):
-    """Pre-LN：x + Attn(LN(x))，再 x + FFN(LN(x))。LayerNorm 只在特征维上做，不跨帧，所以不破坏因果性。"""
+    """Pre-LN: x + Attn(LN(x)), then x + FFN(LN(x)). LayerNorm acts on the feature axis only, never across frames, so causality is preserved."""
 
     def __init__(self, d_model, n_heads, ff_mult, window, lookahead, **kw):
         super().__init__(**kw)

@@ -1,9 +1,9 @@
-"""生成 C++ 对拍用的夹具：输入波形 + numpy 参考实现的输出和每一帧的中间量（只依赖 numpy，主环境就能跑）。
-  uv run python -m transnoise.deploy.fixture data/deploy/<名>/weights.npz [--wav 文件] [--seconds 3] [--out 路径]
+"""Generate the fixture for C++ cross-checking: an input waveform + the numpy reference's output and per-frame intermediates (numpy only, runs in the main environment).
+  uv run python -m transnoise.deploy.fixture data/deploy/<name>/weights.npz [--wav FILE] [--seconds 3] [--out PATH]
 
-格式（小端）：int32 hop, nframes, n_out, n_trace；float32 输入 [nframes·hop]；float32 期望输出 [n_out]；
-然后每个 trace 帧依次：emb[D]、layers[n_layers][D]（每层输出）、xn[D]（最后一层输出的归一化，无仿射）、
-gains[nb_erb]、coefs[nb_df·order·2]（深度滤波系数，tanh 之后）、spec_out 的实部[bins]和虚部[bins]。
+Format (little-endian): int32 hop, nframes, n_out, n_trace; float32 input [nframes*hop]; float32 expected output [n_out];
+then for each trace frame in turn: emb[D], layers[n_layers][D] (every layer's output), xn[D] (normalized last-layer output, no affine),
+gains[nb_erb], coefs[nb_df*order*2] (deep-filter coefficients, after tanh), the real part of spec_out [bins] and its imaginary part [bins].
 """
 
 import argparse

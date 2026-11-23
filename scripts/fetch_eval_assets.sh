@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 下载评测需要的、不属于 Python 包的文件：DeepFilterNet3 二进制 + ONNX 模型、DNSMOS 模型。
-# 已存在的文件会跳过；任何一步失败（含 404）整体退出。在项目根目录运行：bash scripts/fetch_eval_assets.sh
+# Download the files the evaluation needs that are not Python packages: the DeepFilterNet3 binary + ONNX model and the DNSMOS model.
+# Existing files are skipped; any failed step (including a 404) aborts the whole script. Run from the project root: bash scripts/fetch_eval_assets.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-fetch() {  # fetch <输出路径> <URL>
+fetch() {  # fetch <output path> <URL>
     if [ -s "$1" ]; then echo "已存在，跳过: $1"; return; fi
     mkdir -p "$(dirname "$1")"
     echo "下载: $1"

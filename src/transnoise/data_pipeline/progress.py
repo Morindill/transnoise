@@ -4,15 +4,15 @@ from collections import deque
 
 
 class Bar:
-    """按字节数的进度条：终端里原地刷新，重定向时每 10 秒一行。非线程安全，调用方自己加锁。"""
+    """Byte-based progress bar: redraws in place on a terminal, one line every 10 s when redirected. Not thread-safe; the caller locks."""
 
     def __init__(self, label: str, total: int, start: int = 0):
         self.label, self.total = label, total
-        self.samples: deque = deque([(time.time(), start)])  # 近一段时间的 (时间, 已完成字节)，用来算瞬时速度
+        self.samples: deque = deque([(time.time(), start)])  # recent (time, bytes done) pairs, used for the instantaneous speed
         self.last = 0.0
         self.tty = sys.stdout.isatty()
-        self.interval = 0.5 if self.tty else 10  # 刷新间隔（秒）
-        self.window = 5 if self.tty else 30  # 速度窗口必须比刷新间隔长，否则窗口里只剩一个样本，速度恒为 0
+        self.interval = 0.5 if self.tty else 10  # refresh interval (seconds)
+        self.window = 5 if self.tty else 30  # the speed window must be longer than the interval, otherwise only one sample is left and the speed is always 0
 
     def update(self, done: int, extra: str = "", final: bool = False) -> None:
         now = time.time()

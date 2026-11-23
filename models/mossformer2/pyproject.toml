@@ -1,6 +1,6 @@
-# MossFormer2_SE_48K（ClearerVoice-Studio 的 pip 包 clearvoice）。
-# clearvoice 钉了 numpy<2、librosa==0.10.2.post1、opencv-python==4.10.0.84 等，所以必须独立环境。
-# Linux 上 PyPI 的 torch 默认带 CUDA，不用额外配置 index。用法：uv sync --project models/mossformer2
+# MossFormer2_SE_48K (the clearvoice pip package of ClearerVoice-Studio).
+# clearvoice pins numpy<2, librosa==0.10.2.post1, opencv-python==4.10.0.84 and more, so it needs its own environment.
+# On Linux the PyPI torch ships with CUDA by default; no extra index configuration needed. Usage: uv sync --project models/mossformer2
 [project]
 name = "model-mossformer2"
 version = "0"

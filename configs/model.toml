@@ -1,24 +1,24 @@
-# 模型超参（流式降噪：STFT 域 + 因果 Transformer encoder）。只在 train 环境（Keras + TensorFlow）里使用。
-# 结构参照 DeepFilterNet3（ERB 增益 + 低频深度滤波），时序模块用滑动窗口 Transformer 代替 GRU。
+# Model hyperparameters (streaming denoising: STFT domain + causal Transformer encoder). Used only in the train environment (Keras + TensorFlow).
+# The structure follows DeepFilterNet3 (ERB gains + low-frequency deep filtering), with a sliding-window Transformer replacing the GRU as the temporal module.
 
 [frontend]
 sr = 48000
-fft = 960               # 20 ms 窗
-hop = 480               # 10 ms 帧移（和 RNNoise / DFN3 一致，延迟可以直接对比）
-nb_erb = 32             # ERB 频带数：输入特征和增益输出都用这个分辨率
-min_erb_bins = 2        # 每个 ERB 频带至少包含几个 STFT 频点
-nb_df = 192              # 深度滤波作用的最低频点数（192 × 50 Hz = 9.6 kHz）
-erb_db_offset = 60.0    # ERB 特征 = (10·log10(功率) + offset) / scale，固定仿射，不依赖历史（流式友好）
+fft = 960               # 20 ms window
+hop = 480               # 10 ms frame shift (same as RNNoise / DFN3, so delays are directly comparable)
+nb_erb = 32             # number of ERB bands: used for both the input features and the gain output
+min_erb_bins = 2        # minimum number of STFT bins per ERB band
+nb_df = 192              # number of lowest bins the deep filter acts on (192 x 50 Hz = 9.6 kHz)
+erb_db_offset = 60.0    # ERB feature = (10*log10(power) + offset) / scale, a fixed affine map independent of history (streaming friendly)
 erb_db_scale = 40.0
 
 [transformer]
-d_model = 168
+d_model = 192
 n_layers = 3
 n_heads = 4
-ff_mult = 2             # 前馈层宽度 = d_model × ff_mult
-window = 100            # 每帧向过去看多少帧（100 帧 = 1 秒）
-lookahead = 1           # 向未来看多少帧（每帧 10 ms）。只在第一层注意力和深度滤波里使用，后面的层严格因果，
-                        # 所以总前视就是这个数，不会随层数累加。0 = 完全因果（和 RNNoise 同档）
+ff_mult = 2             # feed-forward width = d_model x ff_mult
+window = 100            # how many frames each frame looks back (100 frames = 1 second)
+lookahead = 1           # how many frames each frame looks ahead (10 ms each). Used only in the first attention layer and the deep filter;
+                        # later layers are strictly causal, so this is the total lookahead and does not accumulate with depth. 0 = fully causal (RNNoise class)
 
 [deep_filter]
-order = 7               # 滤波阶数（用几帧）；0 = 关闭深度滤波，只保留 ERB 增益。前视用上面的 lookahead
+order = 7               # filter order (number of frames used); must be greater than lookahead; the lookahead is the one set above

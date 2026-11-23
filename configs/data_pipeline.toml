@@ -1,39 +1,34 @@
-# 数据管线参数。路径（data/ 目录）由 paths.py 管，数据源清单在 registry.py。
+# Data pipeline parameters. Paths (the data/ directory) are handled by paths.py; the list of data sources is in registry.py.
 
 [download]
-conns = 32           # 单个文件的并发连接数（命令行 --conns 可覆盖）
-chunk_mb = 32       # 分段大小；改了它，已有的 .state 续传进度会作废
-block_mb = 1        # 每次 read 的字节数
+conns = 32           # concurrent connections per file (overridable with --conns on the command line)
+chunk_mb = 32       # segment size; changing it invalidates the resume progress in existing .state files
+block_mb = 1        # bytes per read
 retries = 6
-openslr_host = "www.openslr.org"
-
-# OpenSLR 主站对单连接限速（实测约 1.5MB/s），镜像文件大小与主站一致
-[download.mirrors]
-elda = "openslr.elda.org"
 
 [bandwidth]
-# 谱滚降阈值：高于「200-3000Hz 均值 + floor_db」的最高频率。未用真实数据校准。
+# Spectral roll-off threshold: the highest frequency above "mean of 200-3000 Hz + floor_db". Not calibrated on real data.
 floor_db = -50
-tier_a_hz = 19000   # >= 此值为 A 级（全频带）
-tier_b_hz = 10000   # >= 此值为 B 级，否则 C 级
+tier_a_hz = 19000   # >= this is tier A (full band)
+tier_b_hz = 10000   # >= this is tier B, otherwise tier C
 
 [clean]
-min_duration = 1.0          # 秒；语音和噪声
+min_duration = 1.0          # seconds; speech and noise
 rir_min_duration = 0.05
-long_noise_chunk_sec = 60   # 设了 channel 的长录音（如 WHAM!）切成多长一段处理；结尾不足半段的并进最后一段
+long_noise_chunk_sec = 60   # how long the segments are for long recordings that set a channel (e.g. WHAM!); a tail shorter than half a segment is merged into the last one
 speech_max_clip_ratio = 0.001
 
-[clean.min_rms_db]          # dBFS，低于则判为静音
+[clean.min_rms_db]          # dBFS; anything below is judged silent
 speech = -60
 noise = -70
 
 [split]
-val = 0.15          # 语音按说话人、噪声按源文件哈希；其余为 train
+val = 0.15          # speech is split by speaker, noise by source-file hash; the rest is train
 test = 0.2
 
 [stage]
-workers = 32         # 解码/重采样的进程数；0 = CPU 核数 - 2，最多 16
+workers = 32         # number of decode/resample processes; 0 = CPU cores - 2, at most 16
 
 [raw_sw]
-chunk_sec = 30      # .sw 长文件切成多长的片段
-block = 20          # 连续多少个片段共用一个切分键，避免相邻片段分到不同集合
+chunk_sec = 30      # how long the segments cut from a long .sw file are
+block = 20          # how many consecutive segments share one split key, so neighboring segments do not land in different sets

@@ -1,8 +1,9 @@
-"""多分辨率谱损失（参照 DFN3）+ 带宽掩码。只用 keras.ops。
+"""Multi-resolution spectral loss (after DFN3) + bandwidth mask. Uses keras.ops only.
 
-每个 FFT 大小上：对压缩后的幅度 |X|^γ 和压缩后的复数谱 X·|X|^(γ-1)（保留相位）各算一个 MSE。
-带宽掩码：每条样本给一个截止频率（干净语音的实测带宽），高于它的频点不计入损失——
-16 kHz 以下带宽的语料在高频没有真实内容，不能让模型去"学"那里的静音。每条样本按有效频点数归一化，带宽窄的样本权重不会被稀释。
+At each FFT size: one MSE on the compressed magnitude |X|^gamma and one on the compressed complex spectrum X*|X|^(gamma-1) (phase kept).
+Bandwidth mask: each sample carries a cutoff frequency (the measured bandwidth of the clean speech); bins above it do not count in the loss.
+Corpora with bandwidth below 16 kHz have no real content at high frequencies, and the model must not "learn" the silence there.
+Each sample is normalized by its number of valid bins, so narrow-band samples are not diluted.
 """
 
 import numpy as np
@@ -12,7 +13,7 @@ from .config import TrainConfig
 
 
 def _masked_mean(x, mask):
-    """x: [B, F, K]，mask: [B, K]（0/1）→ 每条样本在有效频点上的均值，再对 batch 取平均。"""
+    """x: [B, F, K], mask: [B, K] (0/1) -> per-sample mean over the valid bins, then averaged over the batch."""
     num = ops.sum(x * mask[:, None, :], axis=(1, 2))
     den = ops.sum(mask, axis=1) * ops.cast(ops.shape(x)[1], x.dtype)
     return ops.mean(num / ops.maximum(den, 1.0))
@@ -21,14 +22,14 @@ def _masked_mean(x, mask):
 class SpectralLoss:
     def __init__(self, cfg: TrainConfig, sr: int = 48000):
         self.cfg, self.sr = cfg, sr
-        # 每个分辨率的频点频率 [K]，用来和截止频率比较
+        # bin frequencies [K] at each resolution, compared against the cutoff frequency
         self.freqs = {n: np.arange(n // 2 + 1, dtype="float32") * sr / n for n in cfg.fft_sizes}
 
     def _spec(self, x, n):
         return ops.stft(x, n, n // 4, n, window="hann", center=True)
 
     def __call__(self, clean, pred, cutoff_hz):
-        """clean/pred: [B, T]；cutoff_hz: [B]。返回 (总损失, {幅度项, 复数项})。"""
+        """clean/pred: [B, T]; cutoff_hz: [B]. Returns (total loss, {magnitude term, complex term})."""
         g = self.cfg.gamma
         mags, cplxs = [], []
         for n in self.cfg.fft_sizes:

@@ -1,5 +1,5 @@
-# RNNoise（pyrnnoise：自带编译好的 manylinux wheel，不需要编译器）。
-# 独立 uv 环境，不要和主项目混装。用法：uv sync --project models/rnnoise
+# RNNoise (pyrnnoise: ships a prebuilt manylinux wheel, no compiler needed).
+# A separate uv environment; do not mix it with the main project. Usage: uv sync --project models/rnnoise
 [project]
 name = "model-rnnoise"
 version = "0"

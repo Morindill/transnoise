@@ -1,7 +1,7 @@
-"""评测的固定输入输出：输入 = 测试集 + 一个增强后的 wav 目录，输出 = results.jsonl（每条一行分数）。
+"""The fixed evaluation interface: input = a test set + a directory of enhanced wavs, output = results.jsonl (one row of scores per clip).
 
-评测不知道、也不关心 wav 是哪个模型怎么产生的。要求：目录里有测试集每条的 <id>.wav，48kHz 单声道。
-每次都全部重算并覆盖结果。
+The evaluation neither knows nor cares which model produced the wavs or how. Requirement: the directory has an <id>.wav
+for every clip of the test set, 48 kHz mono. Everything is recomputed and the results overwritten on every run.
 """
 
 import json
@@ -18,7 +18,7 @@ KEEP = ("id", "lang", "snr_db", "reverb", "speech_source", "noise_source", "bw_t
 
 
 def _score_one(args: tuple) -> dict:
-    """worker：读 clean 和增强结果 → 估计延迟 → 对齐 → 打分。"""
+    """Worker: read clean and the enhanced result -> estimate the delay -> align -> score."""
     tdir, enhanced, row = args
     clean = sf.read(tdir / "clean" / f"{row['id']}.wav", dtype="float32")[0]
     est, sr = sf.read(enhanced / f"{row['id']}.wav", dtype="float32")
@@ -47,12 +47,12 @@ def score(testset: str, enhanced: Path, name: str | None = None, workers: int | 
     out = EVAL / "runs" / testset / name / "results.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".tmp")
-    with ProcessPoolExecutor(workers) as pool:  # CPU 指标多进程并行
+    with ProcessPoolExecutor(workers) as pool:  # CPU metrics run in parallel processes
         parts = list(pool.map(_score_one, [(tdir, enhanced, m) for m in meta], chunksize=4))
-    mos = metrics.dnsmos_batch([e16 for _, e16 in parts])  # DNSMOS 在 GPU 上批量算，主进程做
+    mos = metrics.dnsmos_batch([e16 for _, e16 in parts])  # DNSMOS is batched on the GPU in the main process
     with tmp.open("w") as f:
         for (row, _), (sig, bak, ovr) in zip(parts, mos):
             row = row | {"dnsmos_sig": sig, "dnsmos_bak": bak, "dnsmos_ovr": ovr}
             f.write(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}) + "\n")
-    tmp.replace(out)  # 全部算完才替换，中途失败不会留下半份结果
+    tmp.replace(out)  # replace only once everything is computed, so a failure never leaves half a result
     print(f"[{testset}/{name}] 已打分 {len(meta)} 条 → {out}")

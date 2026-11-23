@@ -1,5 +1,5 @@
-"""汇总：读 runs/<测试集>/<名字>/results.jsonl，对比给定的几个名字（默认全部）。
-约定：名为 noisy 的结果（把 testset/noisy 当作"增强目录"打分得到）是基线，用来算 ΔSI-SDR。"""
+"""Summary: read runs/<testset>/<name>/results.jsonl and compare the given names (all by default).
+Convention: the result named noisy (the test set's noisy/ scored as if it were an enhanced directory) is the baseline for dSI-SDR."""
 
 import csv
 import json
@@ -11,11 +11,11 @@ from ..paths import EVAL, SR
 METRICS = [("si_sdr_imp", "ΔSI-SDR"), ("si_sdr", "SI-SDR"), ("pesq", "PESQ"), ("stoi", "STOI"),
            ("dnsmos_sig", "SIG"), ("dnsmos_bak", "BAK"), ("dnsmos_ovr", "OVRL")]
 BASELINE = "noisy"
-SELF_CHECK = "clean"  # 参考对自身打分：误差为 0，SI-SDR 只取决于浮点精度（约 145 dB），不是质量，不参与比较
+SELF_CHECK = "clean"  # the reference scored against itself: zero error, so SI-SDR only reflects float precision (about 145 dB), not quality; excluded from comparison
 
 
 def _mean_ci(vals) -> tuple[float, float, int]:
-    v = np.array([x for x in vals if x == x], dtype=float)  # 去掉 NaN
+    v = np.array([x for x in vals if x == x], dtype=float)  # drop NaN
     if not len(v):
         return float("nan"), float("nan"), 0
     return float(v.mean()), float(1.96 * v.std(ddof=1) / np.sqrt(len(v))) if len(v) > 1 else 0.0, len(v)
@@ -47,7 +47,7 @@ def _overall(rows: dict) -> tuple[str, list[dict]]:
     for name, rs in rows.items():
         stats = {k: _mean_ci([r[k] for r in rs if k in r]) for k, _ in cols}
         delay = float(np.median([r["delay_samples"] for r in rs])) / SR * 1000
-        # 没有有效值（n=0，例如当时没装 pesq）显示 —，不显示 nan±nan
+        # no valid values (n=0, e.g. pesq was not installed at the time): show a dash, not nan±nan
         cells = [("—" if (name == SELF_CHECK and k in ("si_sdr", "si_sdr_imp")) or stats[k][2] == 0 else f"{stats[k][0]:.2f}±{stats[k][1]:.2f}")
                  for k, _ in cols]
         body.append([name, str(len(rs))] + cells + [f"{delay:.1f}"])

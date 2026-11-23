@@ -1,5 +1,5 @@
-"""部署参考实现自检：导出权重 → numpy 带 KV 缓存的流式实现 → 和 Keras 离线前向逐样本对拍（含负对照）。
-用法：uv run transnoise check deploy [--ckpt data/checkpoints/baseline/best] [--clips 3] [--seconds 6]"""
+"""Deployment reference self-check: export weights -> numpy streaming implementation with a KV cache -> compare sample by sample with the Keras offline forward (including a negative control).
+Usage: uv run transnoise check deploy [--ckpt data/checkpoints/baseline/best] [--clips 3] [--seconds 6]"""
 
 import argparse
 import time
@@ -35,14 +35,13 @@ def main() -> None:
     import tensorflow as tf
 
     setup_gpu()
-    tf.config.experimental.enable_tensor_float_32_execution(False)  # Ampere 以上默认用 TF32 做矩阵乘（尾数 10 位），会带来约 1e-3 的误差，对拍要用真正的 fp32
+    tf.config.experimental.enable_tensor_float_32_execution(False)  # Ampere and newer use TF32 for matmuls by default (10-bit mantissa), which adds about 1e-3 of error; the comparison needs true fp32
     ckpt = resolve(ROOT / a.ckpt if not Path(a.ckpt).is_absolute() else Path(a.ckpt))
     out = DATA / "deploy" / ckpt.parent.name / "weights.npz"
     info = export(ckpt, out)
     cfg_d = info["config"]
 
-    snap = ckpt.parent / "config_model.toml"
-    model = Denoiser(ModelConfig.load(snap if snap.exists() else ROOT / "configs" / "model.toml"))
+    model = Denoiser(ModelConfig.from_checkpoint(ckpt))
     model(np.zeros((1, 48000), "float32"))
     checkpoint.load_weights(ckpt, model, ema=True)
 
@@ -68,13 +67,13 @@ def main() -> None:
         print(f"  {f.name}: 最大绝对误差 {err.max():.2e}，相对 RMS 误差 {rel:.2e}（numpy 参考 {dt / (len(x) / hop) * 1e3:.2f} ms/帧，仅供参考）")
         if f == files[0]:
             ctrl = {k: weights[k] for k in weights.files}
-            ctrl["blocks.0.attn.rel_bias"] = ctrl["blocks.0.attn.rel_bias"][:, ::-1].copy()  # 负对照：偏置表反过来
+            ctrl["blocks.0.attn.rel_bias"] = ctrl["blocks.0.attn.rel_bias"][:, ::-1].copy()  # negative control: reverse the bias table
             y_bad = RefStream(ctrl).process(x)
             rel_bad = float(np.sqrt(np.mean((y_bad - y_off[:L]) ** 2) / np.mean(y_off[:L] ** 2)))
     check("numpy 流式 = Keras 离线（相对 RMS 误差 < 1e-4）", worst_rel < 1e-4, f"最差 {worst_rel:.2e}，最大绝对误差 {worst_abs:.2e}")
     check("负对照：改坏一张偏置表后误差明显变大（≥ 100 倍）", rel_bad > 100 * max(worst_rel, 1e-7), f"{rel_bad:.2e}")
 
-    # 起始段：序列开头的帧没有完整历史，最容易写错
+    # Start of the sequence: the first frames have no full history, the easiest place to get wrong
     ref = RefStream(weights)
     x = np.random.default_rng(0).standard_normal(hop * 12).astype("float32") * 0.1
     y_off = np.asarray(model(x[None]))[0]

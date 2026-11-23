@@ -7,7 +7,7 @@ from ..paths import DATA, ROOT
 
 @dataclass(frozen=True)
 class TrainConfig:
-    """训练超参，取值全部来自 configs/train.toml（这里不设默认值，避免两处不一致）。"""
+    """Training hyperparameters; every value comes from configs/train.toml (no defaults here, so the two cannot disagree)."""
 
     name: str
     seed: int
@@ -31,6 +31,9 @@ class TrainConfig:
     keep_last: int
     # data
     p_reverb: float
+    p_noise_only: float
+    p_clean: float
+    p_silence: float
     snr_min: float
     snr_max: float
     speech_db_min: float
@@ -51,7 +54,7 @@ class TrainConfig:
 
     @property
     def samples(self) -> int:
-        """片段长度（样本数）。取 480 的整数倍（模型 hop = 10 ms）。"""
+        """Segment length in samples, rounded to a multiple of 480 (the model hop = 10 ms)."""
         return int(round(self.crop_seconds * 48000 / 480)) * 480
 
     @classmethod

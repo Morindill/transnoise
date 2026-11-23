@@ -13,7 +13,7 @@ CLEAN = CFG["clean"]
 
 
 def bandwidth_hz(x: np.ndarray, sr: int) -> float:
-    """谱滚降：活跃帧平均功率谱中，高于 (200-3000Hz 均值 + floor_db) 的最高频率。"""
+    """Spectral roll-off: in the mean power spectrum of the active frames, the highest frequency above (mean of 200-3000 Hz + floor_db)."""
     n = 2048
     x = x[: sr * 60]
     hop = n // 2
@@ -22,7 +22,7 @@ def bandwidth_hz(x: np.ndarray, sr: int) -> float:
     p = np.abs(np.fft.rfft(frames, axis=1)) ** 2
     e = p.sum(1)
     psd = p[e >= np.median(e)].mean(0)
-    psd = np.convolve(psd, np.ones(31) / 31, mode="same")  # 约 ±350Hz 平滑，抑制孤立音调
+    psd = np.convolve(psd, np.ones(31) / 31, mode="same")  # about ±350 Hz smoothing to suppress isolated tones
     db = 10 * np.log10(psd + 1e-20)
     freqs = np.arange(n // 2 + 1) * sr / n
     ref = db[(freqs >= 200) & (freqs <= 3000)].mean()
@@ -38,11 +38,11 @@ def make_id(source: str, member: str) -> str:
 
 
 def process(task: dict) -> dict:
-    """worker：解码 → 单声道 → 质量统计 → 重采样 48k → 写 FLAC。返回 manifest 行。"""
+    """Worker: decode -> mono -> quality statistics -> resample to 48 kHz -> write FLAC. Returns the manifest row."""
     role = task["role"]
     if "pcm" in task:
         mono, sr = task["pcm"].astype(np.float32) / 32768.0, SR
-    elif "audio" in task:  # 主进程已经解码并选好声道的片段（长录音切段后送来）
+    elif "audio" in task:  # a segment the main process already decoded and channel-selected (sent after cutting a long recording)
         mono, sr = task["audio"], task["sr"]
     else:
         x, sr = sf.read(io.BytesIO(task["data"]), dtype="float32", always_2d=True)

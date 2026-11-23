@@ -8,7 +8,7 @@ KEYS = ("id", "path", "source", "role", "lang", "speaker", "duration", "orig_sr"
 
 
 def build_index() -> None:
-    """把各数据源的 manifest 汇总成 index/{train,val,test}.jsonl（只含 keep 的行）。可随时重建。"""
+    """Merge the per-source manifests into index/{train,val,test}.jsonl (kept rows only). Can be rebuilt at any time."""
     INDEX.mkdir(parents=True, exist_ok=True)
     tmp = {s: INDEX / f"{s}.jsonl.tmp" for s in SPLITS}
     hours: dict = defaultdict(float)

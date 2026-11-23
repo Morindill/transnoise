@@ -1,4 +1,4 @@
-// 测试程序共用：把整个文件读进内存（权重、夹具）。
+// Shared by the test programs: read a whole file into memory (weights, fixture).
 #pragma once
 #include <cstdint>
 #include <cstdio>

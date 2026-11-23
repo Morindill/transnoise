@@ -1,5 +1,5 @@
-// 对拍：C++ 实现 vs numpy 参考实现的夹具（输入波形 + 期望输出 + 每帧中间量）。
-// 用法：test_fixture <weights.bin> <fixture.bin>
+// Cross-check: the C++ implementation vs the numpy reference's fixture (input waveform + expected output + per-frame intermediates).
+// Usage: test_fixture <weights.bin> <fixture.bin>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -11,7 +11,7 @@
 #include "tn/model.h"
 
 struct Err {
-  double worst = 0;  // max|a-b| / max(max|b|, 1e-3)，按帧取最差
+  double worst = 0;  // max|a-b| / max(max|b|, 1e-3), worst over frames
   void add(const float* a, const float* b, int n) {
     double d = 0, s = 1e-3;
     for (int i = 0; i < n; ++i) d = std::max(d, double(std::fabs(a[i] - b[i]))), s = std::max(s, double(std::fabs(b[i])));
@@ -53,7 +53,7 @@ int main(int argc, char** argv) {
   float out[tn::HOP];
   for (int f = 0; f < nframes; ++f) {
     const bool ready = model->push(in + size_t(f) * hop, out);
-    if (f < tn::LA) continue;  // 预热：还没有任何帧算完（trace 从 u=0 起，那一帧不产出样本）
+    if (f < tn::LA) continue;  // warm-up: no frame is finished yet (the trace starts at u=0, a frame that produces no samples)
     if (ready) {
       std::copy(out, out + hop, got.begin() + size_t(produced) * hop);
       ++produced;
@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
   static const char* layer_names[] = {"第 0 层输出", "第 1 层输出", "第 2 层输出", "第 3 层输出"};
   for (int i = 0; i < tn::LAYERS; ++i) rows.push_back({layer_names[i], e_layer[i].worst, 1e-4});
   rows.push_back({"norm_out 归一化", e_xn.worst, 1e-4});
-  // 输出头：宽线性层 + LN 折叠的舍入差，再经 sigmoid/tanh；输出波形的误差（下面）才是最终判据
+  // Output heads: a wide linear layer + the rounding difference from folding LN, then sigmoid/tanh; the output waveform error (below) is the final criterion
   rows.push_back({"ERB 增益", e_gain.worst, 5e-5});
   rows.push_back({"深度滤波系数", e_coef.worst, 5e-5});
   rows.push_back({"增强谱实部", e_re.worst, 1e-4});
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
   ok &= pass_out;
   std::printf("输出波形：[%s] 相对 RMS 误差 %.2e，最大绝对误差 %.2e（%d 个样本）\n", pass_out ? "通过" : "失败", rel, dmax, n_out);
 
-  // 速度：重放整段输入几遍，统计每帧耗时（只是粗略的参考，真正的 p99 要在宿主里量）
+  // Speed: replay the whole input a few times and collect the per-frame time (only a rough reference; the real p99 has to be measured in the host)
   std::vector<double> us;
   model->trace = nullptr;
   for (int rep = 0; rep < 5; ++rep) {

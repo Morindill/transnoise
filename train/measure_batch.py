@@ -1,6 +1,6 @@
-"""实测不同片段长度 × batch 大小下，一步训练（前向+反向+优化器更新）的显存峰值和速度，用来定 configs/train.toml 里的 batch_size。
-用法：uv run transnoise check batch [--crops 3 4 5] [--batches 8 16 24 32 48 64] [--budget-gb 8]
-随机数据，不读数据集。显存峰值是 TF 分配器实际分配过的最大值；--budget-gb 之后的 batch 不再测。"""
+"""Measure the GPU memory peak and speed of one training step (forward + backward + optimizer update) for different segment lengths x batch sizes, to choose batch_size in configs/train.toml.
+Usage: uv run transnoise check batch [--crops 3 4 5] [--batches 8 16 24 32 48 64] [--budget-gb 8]
+Random data, the dataset is not read. The memory peak is the largest amount the TF allocator actually allocated; batches beyond --budget-gb are not measured."""
 
 import argparse
 import os
@@ -25,7 +25,7 @@ p.add_argument("--budget-gb", type=float, default=8.0)
 a = p.parse_args()
 
 mcfg = ModelConfig.load()
-total = tf.config.experimental.get_memory_info("GPU:0")  # 触发 GPU 初始化
+total = tf.config.experimental.get_memory_info("GPU:0")  # triggers GPU initialization
 print(f"{'片段(s)':>7} {'batch':>6} {'峰值显存':>9} {'ms/步':>8} {'条/秒':>8}  备注")
 for crop in a.crops:
     tcfg = replace(TrainConfig.load(), crop_seconds=crop)
@@ -37,7 +37,7 @@ for crop in a.crops:
         cutoff = np.full(b, 24000.0, "float32")
         tf.config.experimental.reset_memory_stats("GPU:0")
         try:
-            tr.train_step(y, x, cutoff)  # 第一次含编译
+            tr.train_step(y, x, cutoff)  # the first step includes compilation
             t0 = time.perf_counter()
             for _ in range(5):
                 tr.train_step(y, x, cutoff)

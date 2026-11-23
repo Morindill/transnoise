@@ -24,7 +24,7 @@ from .registry import Source
 
 AUDIO = re.compile(r"\.(wav|flac)$", re.I)
 UPSTREAM = {"train": "train", "dev": "val", "test": "test"}
-META_SPLIT = {"train": "train", "valid": "val", "val": "val", "dev": "val", "test": "test"}  # 包内 CSV 里的切分名（小写）
+META_SPLIT = {"train": "train", "valid": "val", "val": "val", "dev": "val", "test": "test"}  # split names in the in-archive CSV (lowercase)
 SPLIT, RAW_SW, STAGE = CFG["split"], CFG["raw_sw"], CFG["stage"]
 
 
@@ -34,7 +34,7 @@ def hash_split(key: str) -> str:
 
 
 def _load_done(mf: Path) -> set[str]:
-    """读取已处理条目的 id。被强杀时 manifest 末行可能只写了一半，这里把残缺的尾部截掉。"""
+    """Read the ids of already processed entries. After a hard kill the last manifest line may be half written; truncate that broken tail."""
     ids: set[str] = set()
     if not mf.exists():
         return ids
@@ -53,7 +53,7 @@ def _load_done(mf: Path) -> set[str]:
 
 
 def _load_meta(src: Source, unit: Path) -> dict[str, tuple[str, str]]:
-    """包内的 CSV → {文件名: (切分, 分组)}。直接读 zip 末尾的目录，不用遍历整个包。"""
+    """In-archive CSV -> {file name: (split, group)}. Reads the zip's central directory at the end of the file; no need to walk the whole archive."""
     fcol, scol, gcol = src.meta_cols
     with zipfile.ZipFile(unit) as z, z.open(src.meta_csv) as f:
         return {r[fcol]: (META_SPLIT[r[scol].strip().lower()], r[gcol])
@@ -61,8 +61,10 @@ def _load_meta(src: Source, unit: Path) -> dict[str, tuple[str, str]]:
 
 
 def _segments(src: Source, t: dict, data: bytes, done: set[str]) -> Iterator[dict]:
-    """长录音：在主进程里解码、选声道，切成 long_noise_chunk_sec 秒一段，每段一个任务（worker 不会收到几百 MB 的整文件）。
-    结尾不足半段的尾巴并进最后一段，不产生碎片。段的 id 由 <成员>#<序号> 决定，续跑时已完成的段会跳过。"""
+    """Long recordings: decode and pick the channel in the main process, cut into long_noise_chunk_sec-second segments, one
+    task per segment (workers never receive a whole file of hundreds of MB). A tail shorter than half a segment is merged
+    into the last segment, so no fragments are produced. A segment's id is determined by <member>#<index>, so segments
+    already done are skipped when resuming."""
     with sf.SoundFile(io.BytesIO(data)) as f:
         n, sr = len(f), f.samplerate
         step = int(sr * CFG["clean"]["long_noise_chunk_sec"])
@@ -80,7 +82,7 @@ def _segments(src: Source, t: dict, data: bytes, done: set[str]) -> Iterator[dic
 
 
 def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None]) -> Iterator[dict]:
-    """遍历一个输入单元（一个压缩包，或一个 .sw 文件），产出待处理任务。on_pos 报告已读字节数。"""
+    """Walk one input unit (an archive or a .sw file) and yield the tasks to process. on_pos reports the bytes read so far."""
     inc = re.compile(src.include) if src.include else None
     spk_re = re.compile(src.speaker) if src.speaker else None
     split_re = re.compile(src.split) if src.split else None
@@ -112,7 +114,7 @@ def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None
             sm = spk_re.search(member) if spk_re else None
             speaker = sm.group("spk") if sm else None
             t = base(member, speaker, speaker or member)
-            if meta:  # 上游给了每个文件的切分和分组（地点）：直接用，缺了就报错，不悄悄退回哈希
+            if meta:  # upstream gives each file's split and group (location): use it directly; a missing entry is an error, never a silent fallback to hashing
                 name = member.rsplit("/", 1)[-1]
                 if name not in meta:
                     raise SystemExit(f"[{src.name}] {member} 不在 {src.meta_csv} 里，没法确定它的切分")
@@ -124,10 +126,10 @@ def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None
                 yield t
 
 
-def stage(src: Source, workers: int | None = None, limit: int | None = None, redo: bool = False) -> None:
-    """主线程依次读压缩包（流式解压），workers 个进程做解码、清洗、重采样、写 FLAC。
+def stage(src: Source, workers: int | None = None, redo: bool = False) -> None:
+    """The main thread reads the archives one after another (streaming decompression); worker processes decode, clean, resample and write FLAC.
 
-    断点续跑：manifest 记已处理的条目；<源>.units.json 记已完整处理过的压缩包，整包直接跳过。
+    Resumable: the manifest records processed entries; <source>.units.json records archives that were fully processed, which are skipped entirely.
     """
     if not src.raw_dir.is_dir():
         raise SystemExit(f"[{src.name}] {src.raw_dir} 不存在，先 download")
@@ -152,16 +154,16 @@ def stage(src: Source, workers: int | None = None, limit: int | None = None, red
         print(f"[{src.name}] 续跑：已有 {len(done)} 条，剩 {len(units)}/{len(all_units)} 个包")
     workers = workers or STAGE["workers"] or max(1, min(16, (os.cpu_count() or 4) - 2))
 
-    lock = threading.Lock()  # 回调在进程池的管理线程里执行，要和主线程互斥
+    lock = threading.Lock()  # callbacks run in the process pool's management thread and must be mutually exclusive with the main thread
     stop = threading.Event()
-    slots = threading.BoundedSemaphore(workers * 4)  # 限制在途任务数，控制内存
+    slots = threading.BoundedSemaphore(workers * 4)  # bound the number of in-flight tasks to control memory
     errors: list[BaseException] = []
-    stats = {"submitted": 0, "n": 0, "kept": 0, "pos": 0}
+    stats = {"n": 0, "kept": 0, "pos": 0}
     pos = {u.name: 0 for u in units}
     state = {u.name: {"pending": 0, "fed": False} for u in units}
     bar = Bar(src.name, sum(u.stat().st_size for u in units))
 
-    def progress(final: bool = False) -> None:  # 在 lock 内调用
+    def progress(final: bool = False) -> None:  # call with the lock held
         bar.update(stats["pos"], f"  {stats['n']} 条 保留 {stats['kept']}", final)
 
     def set_pos(unit: Path, p: int) -> None:
@@ -170,13 +172,13 @@ def stage(src: Source, workers: int | None = None, limit: int | None = None, red
             pos[unit.name] = p
             progress()
 
-    def mark_if_complete(unit: Path) -> None:  # 在 lock 内调用：读完且在途任务全部写入后才标记
+    def mark_if_complete(unit: Path) -> None:  # call with the lock held: mark only after the unit is fully read and all its in-flight tasks are written
         s = state[unit.name]
         if s["fed"] and s["pending"] == 0 and not errors:
             units_done[unit.name] = unit.stat().st_size
             uf.write_text(json.dumps(units_done))
 
-    with mf.open("a") as out, ProcessPoolExecutor(workers) as pool:  # 先退出 pool（等回调写完），再关文件
+    with mf.open("a") as out, ProcessPoolExecutor(workers) as pool:  # leave the pool first (waits for the callbacks to finish writing), then close the file
         def on_done(fut, unit: Path) -> None:
             slots.release()
             try:
@@ -197,9 +199,8 @@ def stage(src: Source, workers: int | None = None, limit: int | None = None, red
         def feed() -> None:
             for unit in units:
                 for task in _tasks(src, unit, done, partial(set_pos, unit)):
-                    if stop.is_set() or (limit is not None and stats["submitted"] >= limit):
+                    if stop.is_set():
                         return
-                    stats["submitted"] += 1
                     with lock:
                         state[unit.name]["pending"] += 1
                     slots.acquire()
