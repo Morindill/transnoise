@@ -2,7 +2,7 @@
   uv run python -m transnoise.deploy.fixture data/deploy/<name>/weights.npz [--wav FILE] [--seconds 3] [--out PATH]
 
 Format (little-endian): int32 hop, nframes, n_out, n_trace; float32 input [nframes*hop]; float32 expected output [n_out];
-then for each trace frame in turn: emb[D], layers[n_layers][D] (every layer's output), xn[D] (normalized last-layer output, no affine),
+then for each trace frame in turn: pre[D] (the input of layer 0's attention), layers[n_layers][D] (every layer's output), xn[D] (normalized last-layer output, no affine),
 gains[nb_erb], coefs[nb_df*order*2] (deep-filter coefficients, after tanh), the real part of spec_out [bins] and its imaginary part [bins].
 """
 
@@ -40,10 +40,10 @@ def main() -> None:
         f.write(y.astype("<f4").tobytes())
         for t in ref.trace:
             xn = layer_norm(t["layers"][-1], np.ones(d, "float32"), np.zeros(d, "float32"), eps)
-            parts = [t["emb"], *t["layers"], xn, t["gains"], t["coefs"].reshape(-1).astype("float32"),
+            parts = [t["pre"], *t["layers"], xn, t["gains"], t["coefs"].reshape(-1).astype("float32"),
                      t["spec_out"].real.astype("float32"), t["spec_out"].imag.astype("float32")]
             f.write(b"".join(np.asarray(q, "<f4").tobytes() for q in parts))
-    print(f"{out}：{len(x) // hop} 帧输入，{len(ref.trace)} 个 trace 帧，{len(y)} 个输出样本（{out.stat().st_size / 2**20:.1f} MiB）")
+    print(f"{out}: {len(x) // hop} input frames, {len(ref.trace)} trace frames, {len(y)} output samples ({out.stat().st_size / 2**20:.1f} MiB)")
 
 
 if __name__ == "__main__":

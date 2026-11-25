@@ -21,7 +21,7 @@ struct Err {
 
 int main(int argc, char** argv) {
   if (argc != 3) {
-    std::fprintf(stderr, "用法：%s weights.bin fixture.bin\n", argv[0]);
+    std::fprintf(stderr, "usage: %s weights.bin fixture.bin\n", argv[0]);
     return 2;
   }
   const auto wb = read_file(argv[1]);
@@ -34,7 +34,7 @@ int main(int argc, char** argv) {
   const int32_t* h = reinterpret_cast<const int32_t*>(fx.data());
   const int hop = h[0], nframes = h[1], n_out = h[2], n_trace = h[3];
   if (hop != tn::HOP) {
-    std::fprintf(stderr, "夹具 hop=%d，和编译进来的 HOP=%d 不一致\n", hop, tn::HOP);
+    std::fprintf(stderr, "fixture hop=%d differs from the compiled-in HOP=%d\n", hop, tn::HOP);
     return 2;
   }
   const float* in = reinterpret_cast<const float*>(fx.data() + 16);
@@ -42,11 +42,11 @@ int main(int argc, char** argv) {
   const float* tr = want + n_out;
   constexpr int kTraceLen = tn::D * (2 + tn::LAYERS) + tn::NB_ERB + tn::NB_DF * tn::ORDER * 2 + 2 * tn::BINS;
   if (size_t(16) + 4 * (size_t(nframes) * hop + n_out + size_t(n_trace) * kTraceLen) != fx.size()) {
-    std::fprintf(stderr, "夹具大小和 config.h 对不上\n");
+    std::fprintf(stderr, "fixture size does not match config.h\n");
     return 2;
   }
 
-  Err e_emb, e_xn, e_gain, e_coef, e_re, e_im;
+  Err e_pre, e_xn, e_gain, e_coef, e_re, e_im;
   Err e_layer[tn::LAYERS];
   std::vector<float> got(size_t(n_out), 0.f);
   int produced = 0, tframe = 0;
@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
       ++produced;
     }
     const float* t = tr + size_t(tframe) * kTraceLen;
-    e_emb.add(trace->emb, t, tn::D);
+    e_pre.add(trace->pre, t, tn::D);
     t += tn::D;
     for (int i = 0; i < tn::LAYERS; ++i, t += tn::D) e_layer[i].add(trace->layer[i], t, tn::D);
     e_xn.add(trace->xn, t, tn::D), t += tn::D;
@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
     ++tframe;
   }
   if (produced != n_out / hop || tframe != n_trace) {
-    std::fprintf(stderr, "输出帧数不对：产出 %d 帧，期望 %d；trace %d，期望 %d\n", produced, n_out / hop, tframe, n_trace);
+    std::fprintf(stderr, "wrong number of output frames: produced %d, expected %d; trace %d, expected %d\n", produced, n_out / hop, tframe, n_trace);
     return 1;
   }
   double d2 = 0, s2 = 0, dmax = 0;
@@ -81,28 +81,27 @@ int main(int argc, char** argv) {
   const double rel = std::sqrt(d2 / s2);
 
   struct Row {
-    const char* name;
+    std::string name;
     double err, tol;
   };
-  std::vector<Row> rows = {{"嵌入 emb", e_emb.worst, 1e-4}};
-  static const char* layer_names[] = {"第 0 层输出", "第 1 层输出", "第 2 层输出", "第 3 层输出"};
-  for (int i = 0; i < tn::LAYERS; ++i) rows.push_back({layer_names[i], e_layer[i].worst, 1e-4});
-  rows.push_back({"norm_out 归一化", e_xn.worst, 1e-4});
+  std::vector<Row> rows = {{"layer 0 attention input", e_pre.worst, 1e-4}};
+  for (int i = 0; i < tn::LAYERS; ++i) rows.push_back({"layer " + std::to_string(i) + " output", e_layer[i].worst, 1e-4});
+  rows.push_back({"norm_out", e_xn.worst, 1e-4});
   // Output heads: a wide linear layer + the rounding difference from folding LN, then sigmoid/tanh; the output waveform error (below) is the final criterion
-  rows.push_back({"ERB 增益", e_gain.worst, 5e-5});
-  rows.push_back({"深度滤波系数", e_coef.worst, 5e-5});
-  rows.push_back({"增强谱实部", e_re.worst, 1e-4});
-  rows.push_back({"增强谱虚部", e_im.worst, 1e-4});
+  rows.push_back({"ERB gain", e_gain.worst, 5e-5});
+  rows.push_back({"deep-filter coefs", e_coef.worst, 5e-5});
+  rows.push_back({"enhanced spec real", e_re.worst, 1e-4});
+  rows.push_back({"enhanced spec imag", e_im.worst, 1e-4});
   bool ok = true;
-  std::printf("逐帧中间量（相对最大误差 = max|差| / max(max|参考|, 1e-3)，取所有帧最差）：\n");
+  std::printf("per-frame intermediates (relative max error = max|diff| / max(max|ref|, 1e-3), worst over all frames):\n");
   for (const auto& r : rows) {
     const bool pass = r.err < r.tol;
     ok &= pass;
-    std::printf("  [%s] %-14s %.2e（阈值 %.0e）\n", pass ? "通过" : "失败", r.name, r.err, r.tol);
+    std::printf("  [%s] %-24s %.2e (tolerance %.0e)\n", pass ? "PASS" : "FAIL", r.name.c_str(), r.err, r.tol);
   }
   const bool pass_out = rel < 1e-5 && dmax < 1e-5;
   ok &= pass_out;
-  std::printf("输出波形：[%s] 相对 RMS 误差 %.2e，最大绝对误差 %.2e（%d 个样本）\n", pass_out ? "通过" : "失败", rel, dmax, n_out);
+  std::printf("output waveform: [%s] relative RMS error %.2e, max absolute error %.2e (%d samples)\n", pass_out ? "PASS" : "FAIL", rel, dmax, n_out);
 
   // Speed: replay the whole input a few times and collect the per-frame time (only a rough reference; the real p99 has to be measured in the host)
   std::vector<double> us;
@@ -120,8 +119,8 @@ int main(int argc, char** argv) {
   double mean = 0;
   for (double v : us) mean += v;
   mean /= us.size();
-  std::printf("每帧耗时（%zu 次）：均值 %.1f µs，p50 %.1f，p99 %.1f，最大 %.1f（预算 %.0f µs，均值占 %.2f%%）\n", us.size(), mean, q(0.5), q(0.99), us.back(),
+  std::printf("time per frame (%zu runs): mean %.1f µs, p50 %.1f, p99 %.1f, max %.1f (budget %.0f µs, mean uses %.2f%%)\n", us.size(), mean, q(0.5), q(0.99), us.back(),
               1e6 * tn::HOP / tn::SR, 100 * mean / (1e6 * tn::HOP / tn::SR));
-  std::printf(ok ? "全部通过\n" : "有失败项\n");
+  std::printf(ok ? "all passed\n" : "some checks FAILED\n");
   return ok ? 0 : 1;
 }

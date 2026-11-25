@@ -1,4 +1,4 @@
-"""Denoising model: waveform -> STFT -> features -> encoder -> sliding-window Transformer -> ERB gains + deep filter -> inverse STFT -> waveform.
+"""Denoising model: waveform -> STFT -> features -> encoder -> causal Conformer -> ERB gains + deep filter -> inverse STFT -> waveform.
 
 enhance_frames only processes spectral frames; call is the whole-clip offline forward = Analysis + enhance_frames + Synthesis.
 """
@@ -6,8 +6,8 @@ enhance_frames only processes spectral frames; call is the whole-clip offline fo
 import keras
 from keras import ops
 
-from .attention import TransformerBlock
 from .config import ModelConfig
+from .conformer import ConformerBlock
 from .frontend import Analysis, Synthesis, erb_matrices
 from .heads import DeepFilterHead, ErbGainHead, deep_filter
 
@@ -22,9 +22,9 @@ class Denoiser(keras.Model):
         self.erb_in = keras.layers.Dense(d, activation="gelu")
         self.spec_in = keras.layers.Dense(d, activation="gelu")
         self.mix = keras.layers.Dense(d)
-        # Lookahead lives only in the first layer (and the deep filter): later layers are strictly causal, so the total
-        # lookahead = cfg.lookahead and does not accumulate with depth
-        self.blocks = [TransformerBlock(d, cfg.n_heads, cfg.ff_mult, cfg.window, cfg.lookahead if i == 0 else 0)
+        # Lookahead lives only in the first layer's attention (and the deep filter): later layers and every convolution are strictly causal,
+        # so the total lookahead = cfg.lookahead and does not accumulate with depth
+        self.blocks = [ConformerBlock(d, cfg.n_heads, cfg.ff_mult, cfg.window, cfg.lookahead if i == 0 else 0, cfg.conv_kernel)
                        for i in range(cfg.n_layers)]
         self.norm_out = keras.layers.LayerNormalization()
         self.gain_head = ErbGainHead(cfg)

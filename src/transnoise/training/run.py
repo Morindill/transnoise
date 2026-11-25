@@ -53,7 +53,7 @@ class Logger:
 
             self.tf, self.tb = tf, tf.summary.create_file_writer(str(run_dir / "tb"))
         except ImportError:
-            say("没装 tensorboard，只写 CSV（装法：uv sync --project train）")
+            say("tensorboard is not installed, writing CSV only (install with: uv sync --project train)")
 
     def log(self, step: int, values: dict) -> None:
         row = {"step": step, "time": time.strftime("%H:%M:%S"), **values}
@@ -79,7 +79,7 @@ def parse_overrides(cfg: TrainConfig, items: list[str]) -> TrainConfig:
     for it in items:
         k, v = it.split("=", 1)
         if k not in types:
-            raise SystemExit(f"--set {k}：TrainConfig 没有这个字段")
+            raise SystemExit(f"--set {k}: TrainConfig has no such field")
         upd[k] = type(getattr(cfg, k))(v) if not isinstance(getattr(cfg, k), tuple) else tuple(int(x) for x in v.split(","))
     return replace(cfg, **upd)
 
@@ -87,27 +87,27 @@ def parse_overrides(cfg: TrainConfig, items: list[str]) -> TrainConfig:
 def wipe(run_dir: Path, yes: bool) -> None:
     """--rerun: delete the whole run directory. First list what will be deleted; an interactive terminal asks for confirmation, a non-interactive environment needs an explicit --yes."""
     if not run_dir.exists():
-        say(f"{run_dir} 不存在，没有可删除的存档，直接从头训练")
+        say(f"{run_dir} does not exist, nothing to delete, training from scratch")
         return
     files = [f for f in run_dir.rglob("*") if f.is_file()]
     steps = sorted(d.name for d in run_dir.glob("step_*"))
-    say(f"将删除 {run_dir}：{len(files)} 个文件，{sum(f.stat().st_size for f in files) / 2**20:.0f} MB；"
-        f"检查点 {steps[-1] if steps else '无'}（共 {len(steps)} 个），best {'有' if (run_dir / 'best').exists() else '无'}，日志和曲线一并删除")
+    say(f"will delete {run_dir}: {len(files)} files, {sum(f.stat().st_size for f in files) / 2**20:.0f} MB; "
+        f"checkpoint {steps[-1] if steps else 'none'} ({len(steps)} in total), best {'present' if (run_dir / 'best').exists() else 'absent'}, logs and curves are deleted too")
     if not yes:
         if not sys.stdin.isatty():
-            raise SystemExit("非交互环境下删除存档需要加 --yes")
-        if input("确认删除并从头训练？[y/N] ").strip().lower() != "y":
-            raise SystemExit("已取消，什么都没有删除")
+            raise SystemExit("deleting checkpoints in a non-interactive environment requires --yes")
+        if input("Delete and train from scratch? [y/N] ").strip().lower() != "y":
+            raise SystemExit("cancelled, nothing was deleted")
     shutil.rmtree(run_dir)
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--name", help="运行名（检查点目录 data/checkpoints/<名>/），默认取 configs/train.toml 的 run.name")
-    p.add_argument("--set", action="append", default=[], metavar="字段=值", help="覆盖 TrainConfig 字段，可多次，如 --set batch_size=8")
-    p.add_argument("--max-steps", type=int, help="这次运行最多训练多少步就退出（冒烟测试用）")
-    p.add_argument("--rerun", action="store_true", help="删除这个运行目录里的全部存档，从头重新训练")
-    p.add_argument("--yes", action="store_true", help="--rerun 时跳过确认（nohup/脚本里用）")
+    p.add_argument("--name", help="run name (checkpoint directory data/checkpoints/<name>/); default: run.name in configs/train.toml")
+    p.add_argument("--set", action="append", default=[], metavar="FIELD=VALUE", help="override a TrainConfig field; may be repeated, e.g. --set batch_size=8")
+    p.add_argument("--max-steps", type=int, help="exit after at most this many steps in this run (for smoke tests)")
+    p.add_argument("--rerun", action="store_true", help="delete everything in this run directory and train from scratch")
+    p.add_argument("--yes", action="store_true", help="skip the confirmation with --rerun (for nohup/scripts)")
     a = p.parse_args()
 
     cfg = parse_overrides(TrainConfig.load(), a.set)
@@ -133,11 +133,11 @@ def main() -> None:
     best, meta = float("inf"), trainer.resume()
     if meta:
         best = meta["extra"].get("best_val", best)
-        say(f"从检查点续训：step {trainer.step}，best_val={best:.4g}")
+        say(f"resuming from checkpoint: step {trainer.step}, best_val={best:.4g}")
     else:
-        say(f"从头开始训练：{run_dir}")
+        say(f"training from scratch: {run_dir}")
     params = sum(int(np.prod(w.shape)) for w in trainer.model.weights)
-    say(f"模型 {params / 1e6:.2f}M 参数；batch {cfg.batch_size} × {cfg.crop_seconds}s；总步数 {cfg.total_steps}；lr 峰值 {cfg.peak_lr}")
+    say(f"model {params / 1e6:.2f}M parameters; batch {cfg.batch_size} × {cfg.crop_seconds}s; total steps {cfg.total_steps}; peak lr {cfg.peak_lr}")
 
     val_src = BatchSource("val", cfg, seed=cfg.seed + 10**6)  # fixed validation set: the same batches, so evaluations are comparable
     val = [val_src.batch(i) for i in range(cfg.val_batches)]
@@ -166,14 +166,14 @@ def main() -> None:
             if m["skipped"]:
                 window["skipped"] += 1
                 streak += 1
-                say(f"step {trainer.step}：损失/梯度出现 NaN/Inf，这一步已跳过（连续 {streak} 次）")
+                say(f"step {trainer.step}: NaN/Inf in loss/gradients, step skipped ({streak} in a row)")
                 if streak >= cfg.nan_patience:
                     rollbacks += 1
                     if rollbacks > cfg.max_rollbacks:
-                        raise SystemExit(f"回滚超过 {cfg.max_rollbacks} 次仍然出现 NaN，停止。检查学习率或数据。")
+                        raise SystemExit(f"still NaN after more than {cfg.max_rollbacks} rollbacks, stopping. Check the learning rate or the data.")
                     if trainer.resume() is None:
-                        raise SystemExit("连续出现 NaN，但没有检查点可回滚。")
-                    say(f"回滚到检查点 step {trainer.step}（第 {rollbacks} 次）")
+                        raise SystemExit("NaN in a row but there is no checkpoint to roll back to.")
+                    say(f"rolled back to checkpoint step {trainer.step} (rollback #{rollbacks})")
                     bar.n = trainer.step
                     loader.close()
                     loader, streak = Loader(train_src, start=trainer.step, workers=cfg.workers, prefetch=cfg.prefetch), 0
@@ -203,13 +203,13 @@ def main() -> None:
                 trainer.save(extra())
                 last_saved = step
     except KeyboardInterrupt:
-        say("收到 Ctrl+C，存档后退出")
+        say("Ctrl+C received, saving a checkpoint and exiting")
     finally:
         loader.close()
         if trainer.step > last_saved:
-            say(f"存档 step {trainer.step} → {trainer.save(extra())}")
+            say(f"saved step {trainer.step} → {trainer.save(extra())}")
         bar.close()
-    say(f"结束：step {trainer.step}")
+    say(f"finished: step {trainer.step}")
 
 
 if __name__ == "__main__":

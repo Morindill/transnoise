@@ -51,7 +51,7 @@ def _noise_segment(pools: dict[str, list[dict]], n: int, rng: random.Random) -> 
             x = np.resize(x, n)  # noise shorter than the speech: tile it
         if np.sqrt(np.mean(x**2)) > MIN_NOISE_RMS:
             return x, {"noise_id": row["id"], "noise_source": row["source"], "noise_offset": off}
-    raise RuntimeError("连续 20 次都抽到静音噪声，检查噪声数据")
+    raise RuntimeError("drew silent noise 20 times in a row; check the noise data")
 
 
 def build(name: str, force: bool = False) -> None:
@@ -59,7 +59,7 @@ def build(name: str, force: bool = False) -> None:
     out = EVAL / "testsets" / name
     if out.exists():
         if not force:
-            raise SystemExit(f"{out} 已存在；测试集生成后不应改变，要重建请加 --force")
+            raise SystemExit(f"{out} already exists; a test set must not change once generated, add --force to rebuild")
         shutil.rmtree(out)
         # Once the test set changes, old results and enhanced wavs no longer match it (same file ids, different content, so
         # rescoring would silently produce wrong scores); delete them along with it
@@ -68,7 +68,7 @@ def build(name: str, force: bool = False) -> None:
         for p in stale:
             shutil.rmtree(p) if p.is_dir() else p.unlink()
         if stale:
-            print("已删除过期的评测产物（需要重新推理并打分）：" + "，".join(str(p.relative_to(EVAL)) for p in stale))
+            print("deleted stale evaluation artifacts (re-run inference and scoring): " + ", ".join(str(p.relative_to(EVAL)) for p in stale))
     (out / "noisy").mkdir(parents=True)
     (out / "clean").mkdir()
 
@@ -104,7 +104,7 @@ def build(name: str, force: bool = False) -> None:
         for m in meta:
             f.write(json.dumps(m, ensure_ascii=False) + "\n")
     with (out / "spec.toml").open("w") as f:  # a copy of the generation parameters, for reproducibility
-        f.write(f"# 由 configs/eval.toml 的 [testsets.{name}] 生成\n")
+        f.write(f"# generated from [testsets.{name}] in configs/eval.toml\n")
         for k, v in (spec | {"n_total": len(meta)}).items():
             f.write(f"{k} = {_toml_value(v)}\n")
-    print(f"{out}: {len(meta)} 条，" + "，".join(f"{lang} {sum(m['lang'] == lang for m in meta)}" for lang in sorted({m['lang'] for m in meta})))
+    print(f"{out}: {len(meta)} clips, " + ", ".join(f"{lang} {sum(m['lang'] == lang for m in meta)}" for lang in sorted({m['lang'] for m in meta})))

@@ -26,7 +26,7 @@ def _load(testset: str, names: list[str] | None) -> dict[str, list[dict]]:
     found = [p.name for p in sorted(base.iterdir()) if (p / "results.jsonl").exists()] if base.exists() else []
     names = names or found
     if missing := [n for n in names if n not in found]:
-        raise SystemExit(f"{base} 下没有 {missing} 的结果（先 eval score）；现有: {found}")
+        raise SystemExit(f"no results for {missing} under {base} (run eval score first); available: {found}")
     rows = {n: [json.loads(line) for line in (base / n / "results.jsonl").open()] for n in names}
     if BASELINE in found:
         ref = {r["id"]: r["si_sdr"] for r in (json.loads(line) for line in (base / BASELINE / "results.jsonl").open())}
@@ -53,7 +53,7 @@ def _overall(rows: dict) -> tuple[str, list[dict]]:
         body.append([name, str(len(rs))] + cells + [f"{delay:.1f}"])
         summary.append({"name": name, "n": len(rs), "delay_ms": round(delay, 2),
                         **{k: round(stats[k][0], 4) for k, _ in cols}, **{k + "_ci": round(stats[k][1], 4) for k, _ in cols}})
-    return _table(["名字", "n"] + [n for _, n in cols] + ["延迟 ms"], body), summary
+    return _table(["name", "n"] + [n for _, n in cols] + ["delay ms"], body), summary
 
 
 def _sliced(rows: dict, by: str, metric: str) -> str:
@@ -68,14 +68,14 @@ def _sliced(rows: dict, by: str, metric: str) -> str:
 def report(testset: str, names: list[str] | None, by: list[str], metric: str) -> None:
     rows = _load(testset, names)
     if not rows:
-        raise SystemExit(f"{EVAL / 'runs' / testset} 下没有结果，先 eval score")
+        raise SystemExit(f"no results under {EVAL / 'runs' / testset}; run eval score first")
     table, summary = _overall(rows)
     label = dict(METRICS).get(metric, metric)
-    parts = [f"# 评测报告：{testset}", "", "均值±95% 置信区间。ΔSI-SDR = 相对 `noisy`（带噪输入本身）的改善，没有 noisy 结果就不显示。"
-             "延迟是对齐时用互相关测得的中位数。`clean` 是自检（参考对自身），SI-SDR 不显示，其余指标是各指标的上界参照。", "", "## 总体", table]
+    parts = [f"# Evaluation report: {testset}", "", "Mean ± 95% confidence interval. ΔSI-SDR = improvement over `noisy` (the noisy input itself); not shown when there is no noisy result."
+             " Delay is the median measured by cross-correlation during alignment. `clean` is a self-check (the reference scored against itself): SI-SDR is not shown and the other metrics are upper-bound references.", "", "## Overall", table]
     for b in by:
         sl = {n: rs for n, rs in rows.items() if n != SELF_CHECK or metric not in ("si_sdr", "si_sdr_imp")}
-        parts += ["", f"## 按 {b} 切片（{label} 均值）", _sliced(sl, b, metric)]
+        parts += ["", f"## By {b} (mean {label})", _sliced(sl, b, metric)]
     text = "\n".join(parts)
     out = EVAL / "reports"
     out.mkdir(parents=True, exist_ok=True)
@@ -85,4 +85,4 @@ def report(testset: str, names: list[str] | None, by: list[str], metric: str) ->
         w.writeheader()
         w.writerows(summary)
     print(text)
-    print(f"\n已保存到 {out}/{testset}.md / .csv")
+    print(f"\nsaved to {out}/{testset}.md / .csv")

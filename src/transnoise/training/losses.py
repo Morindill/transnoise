@@ -20,7 +20,7 @@ def _masked_mean(x, mask):
 
 
 class SpectralLoss:
-    def __init__(self, cfg: TrainConfig, sr: int = 48000):
+    def __init__(self, cfg: TrainConfig, sr: int):
         self.cfg, self.sr = cfg, sr
         # bin frequencies [K] at each resolution, compared against the cutoff frequency
         self.freqs = {n: np.arange(n // 2 + 1, dtype="float32") * sr / n for n in cfg.fft_sizes}

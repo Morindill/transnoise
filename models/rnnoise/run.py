@@ -26,4 +26,4 @@ for f in files:
         pass
     total += time.perf_counter() - t
     audio += sf.info(f).duration
-print(f"RNNoise: {len(files)} 个文件，音频 {audio:.0f}s，处理 {total:.1f}s，RTF≈{total / audio:.3f}（CPU，不含启动，仅供参考）")
+print(f"RNNoise: {len(files)} files, audio {audio:.0f}s, processed in {total:.1f}s, RTF≈{total / audio:.3f} (CPU, excluding start-up; for reference only)")

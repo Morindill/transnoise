@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     const std::string a = argv[i];
     auto val = [&]() -> std::string {
       if (i + 1 >= argc) {
-        std::fprintf(stderr, "%s 需要一个参数\n", a.c_str());
+        std::fprintf(stderr, "%s needs an argument\n", a.c_str());
         std::exit(2);
       }
       return argv[++i];
@@ -37,17 +37,17 @@ int main(int argc, char** argv) {
     else if (a == "--block") block = std::atoi(val().c_str());
     else if (a == "--limit") limit = std::strtoul(val().c_str(), nullptr, 10);
     else {
-      std::fprintf(stderr, "未知参数 %s\n", a.c_str());
+      std::fprintf(stderr, "unknown argument %s\n", a.c_str());
       return 2;
     }
   }
   if (weights_path.empty() || in_dir.empty() || out_dir.empty() || block < 0) {
-    std::fprintf(stderr, "用法：%s --weights weights.bin --in 目录 --out 目录 [--block 480] [--limit N]\n", argv[0]);
+    std::fprintf(stderr, "usage: %s --weights weights.bin --in DIR --out DIR [--block 480] [--limit N]\n", argv[0]);
     return 2;
   }
   try {
     std::ifstream wf(weights_path, std::ios::binary);
-    if (!wf) throw std::runtime_error("打不开 " + weights_path);
+    if (!wf) throw std::runtime_error("cannot open " + weights_path);
     const std::vector<uint8_t> wb((std::istreambuf_iterator<char>(wf)), std::istreambuf_iterator<char>());
     tn::Weights weights(wb.data(), wb.size());
     auto model = std::make_unique<tn::Denoiser>(weights);
@@ -58,15 +58,15 @@ int main(int argc, char** argv) {
       if (e.path().extension() == ".wav") files.push_back(e.path());
     std::sort(files.begin(), files.end());
     if (files.size() > limit) files.resize(limit);
-    if (files.empty()) throw std::runtime_error(in_dir + " 里没有 wav");
+    if (files.empty()) throw std::runtime_error(in_dir + ": no wav files");
     fs::create_directories(out_dir);
 
     const int lat = ad.latency(), chunk = block > 0 ? block : 480;
-    std::printf("权重 %s；%zu 个文件；宿主块 %d 样本；延迟 %d 样本 = %.2f ms\n", weights_path.c_str(), files.size(), block, lat, 1e3 * lat / tn::SR);
+    std::printf("weights %s; %zu files; host block %d samples; latency %d samples = %.2f ms\n", weights_path.c_str(), files.size(), block, lat, 1e3 * lat / tn::SR);
     double audio_s = 0, wall_s = 0;
     for (const auto& p : files) {
       const auto a = tn::wav::read(p.string());
-      if (a.sr != tn::SR || a.channels != 1) throw std::runtime_error(p.string() + "：需要 48kHz 单声道");
+      if (a.sr != tn::SR || a.channels != 1) throw std::runtime_error(p.string() + ": needs 48 kHz mono");
       const size_t n = a.x.size();
       std::vector<float> x(a.x), y(n + lat + chunk, 0.f);
       x.resize(n + lat + chunk, 0.f);  // pad with zeros at the end to flush out the delayed tail
@@ -75,12 +75,12 @@ int main(int argc, char** argv) {
       for (size_t pos = 0; pos < n + lat; pos += chunk) ad.process(x.data() + pos, y.data() + pos, chunk);
       wall_s += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       audio_s += double(n) / tn::SR;
-      if (ad.underruns()) throw std::runtime_error("输出不够（underrun），延迟推导有误");
+      if (ad.underruns()) throw std::runtime_error("not enough output (underrun); latency derivation is wrong");
       tn::wav::write_pcm16((fs::path(out_dir) / p.filename()).string(), y.data() + lat, n, tn::SR);
     }
-    std::printf("音频 %.0f s，处理 %.2f s（RTF≈%.4f，单线程，含 BlockAdapter）\n", audio_s, wall_s, wall_s / audio_s);
+    std::printf("audio %.0f s, processed in %.2f s (RTF≈%.4f, single thread, including BlockAdapter)\n", audio_s, wall_s, wall_s / audio_s);
   } catch (const std::exception& e) {
-    std::fprintf(stderr, "错误：%s\n", e.what());
+    std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
   }
   return 0;

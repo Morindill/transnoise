@@ -20,20 +20,20 @@ ok = True
 def check(name: str, cond: bool, detail: str = "") -> None:
     global ok
     ok &= bool(cond)
-    print(f"[{'通过' if cond else '失败'}] {name} {detail}")
+    print(f"[{'PASS' if cond else 'FAIL'}] {name} {detail}")
 
 
 m = Denoiser(cfg)
 y = np.asarray(m(x))
 n = sum(int(np.prod(w.shape)) for w in m.weights)
-check("输出形状 = 输入形状", y.shape == x.shape, f"{y.shape}")
-print(f"参数量 {n / 1e6:.2f}M（DFN3 约 2.13M）；ERB 频带宽度 {erb_widths(cfg)}")
-print(f"延迟：整体 {cfg.bulk_delay_ms:.0f} ms，最坏 {cfg.latency_ms:.0f} ms（lookahead={cfg.lookahead}）")
+check("output shape = input shape", y.shape == x.shape, f"{y.shape}")
+print(f"parameters {n / 1e6:.2f}M (DFN3 about 2.13M); ERB band widths {erb_widths(cfg)}")
+print(f"latency: overall {cfg.bulk_delay_ms:.0f} ms, worst {cfg.latency_ms:.0f} ms (lookahead={cfg.lookahead})")
 
 # 1) analysis -> synthesis reconstructs perfectly (the front and back end themselves lose nothing)
 re, im = m.analysis(x)
 rec = np.asarray(m.synthesis((re, im), length=T))
-check("STFT 分析→合成 完美重建", np.abs(rec - x).max() < 1e-5, f"最大误差 {np.abs(rec - x).max():.2e}")
+check("STFT analysis -> synthesis perfect reconstruction", np.abs(rec - x).max() < 1e-5, f"max error {np.abs(rec - x).max():.2e}")
 
 
 # 2) causality: when the input is changed from sample s onward, the first affected output sample must not be earlier than 480*(floor(s/480) - lookahead - 1)
@@ -47,8 +47,8 @@ def first_change(model, s: int) -> int:
 s = cfg.hop * 100
 bound = cfg.hop * (s // cfg.hop - cfg.lookahead - 1)
 n0 = first_change(m, s)
-check("因果性：输出不会比输入早变化超过前视预算", n0 >= bound, f"s={s}，最早受影响样本 {n0}，下界 {bound}")
-check("前视确实被用到、且没有随层数累加（下界是紧的；窗口边缘权重≈0，容许差几个样本）", n0 - bound < 16, f"层数={cfg.n_layers}，差 {n0 - bound} 个样本")
+check("causality: the output never changes earlier than the lookahead budget allows", n0 >= bound, f"s={s}, earliest affected sample {n0}, lower bound {bound}")
+check("lookahead is actually used and does not accumulate with depth (the bound is tight; window-edge weights are ≈0, so a few samples of slack are allowed)", n0 - bound < 16, f"layers={cfg.n_layers}, gap {n0 - bound} samples")
 
-print("\n全部通过" if ok else "\n有失败项")
+print("\nall passed" if ok else "\nsome checks FAILED")
 raise SystemExit(0 if ok else 1)

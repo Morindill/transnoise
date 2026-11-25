@@ -18,7 +18,7 @@ TransnoiseProcessor::TransnoiseProcessor()
     model_ok_ = true;
   } catch (const std::exception& e) {
     juce::ignoreUnused(e);  // DBG is empty in Release
-    DBG("Transnoise：权重加载失败：" << e.what());  // the plugin passes audio through instead of crashing
+    DBG("Transnoise: failed to load weights:" << e.what());  // the plugin passes audio through instead of crashing
   }
 }
 

@@ -23,7 +23,7 @@ def _score_one(args: tuple) -> dict:
     clean = sf.read(tdir / "clean" / f"{row['id']}.wav", dtype="float32")[0]
     est, sr = sf.read(enhanced / f"{row['id']}.wav", dtype="float32")
     if sr != SR or est.ndim != 1:
-        raise ValueError(f"{enhanced / (row['id'] + '.wav')}: 需要 {SR}Hz 单声道，实际 sr={sr} 形状={est.shape}")
+        raise ValueError(f"{enhanced / (row['id'] + '.wav')}: needs {SR} Hz mono, got sr={sr} shape={est.shape}")
     lag = metrics.estimate_lag(clean, est)
     out = {k: row[k] for k in KEEP} | {"delay_samples": lag}
     cpu, e16 = metrics.score_cpu(clean, metrics.align(est, lag, len(clean)))
@@ -33,16 +33,16 @@ def _score_one(args: tuple) -> dict:
 def score(testset: str, enhanced: Path, name: str | None = None, workers: int | None = None) -> None:
     tdir = EVAL / "testsets" / testset
     if not tdir.exists():
-        raise SystemExit(f"测试集 {tdir} 不存在，先 eval build-testset")
+        raise SystemExit(f"test set {tdir} does not exist; run eval build-testset first")
     enhanced = enhanced.resolve()
     meta = [json.loads(line) for line in (tdir / "meta.jsonl").open()]
     missing = [m["id"] for m in meta if not (enhanced / f"{m['id']}.wav").exists()]
     if missing:
-        raise SystemExit(f"{enhanced} 缺 {len(missing)}/{len(meta)} 个文件，例如 {missing[0]}.wav")
+        raise SystemExit(f"{enhanced} is missing {len(missing)}/{len(meta)} files, e.g. {missing[0]}.wav")
     name = name or (enhanced.parent.name if enhanced.name == "wav" else enhanced.name)
     workers = workers or max(1, min(26, (os.cpu_count() or 4) - 2))
     if metrics.pesq is None:
-        print("警告：没有安装 pesq，PESQ 这一列会是 NaN。安装：uv sync（pesq 在默认依赖组里，需要 C 编译器）")
+        print("warning: pesq is not installed, the PESQ column will be NaN. Install with: uv sync (pesq is in the default dependency group and needs a C compiler)")
 
     out = EVAL / "runs" / testset / name / "results.jsonl"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -55,4 +55,4 @@ def score(testset: str, enhanced: Path, name: str | None = None, workers: int | 
             row = row | {"dnsmos_sig": sig, "dnsmos_bak": bak, "dnsmos_ovr": ovr}
             f.write(json.dumps({k: round(v, 4) if isinstance(v, float) else v for k, v in row.items()}) + "\n")
     tmp.replace(out)  # replace only once everything is computed, so a failure never leaves half a result
-    print(f"[{testset}/{name}] 已打分 {len(meta)} 条 → {out}")
+    print(f"[{testset}/{name}] scored {len(meta)} clips → {out}")

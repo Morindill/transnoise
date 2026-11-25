@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
     if (ref_model->push(in + size_t(f) * tn::HOP, o)) ref.insert(ref.end(), o, o + tn::HOP);
   bool ok = ref.size() == size_t(n_out);
   for (int i = 0; ok && i < n_out; ++i) ok = ref[i] == want[i] || std::fabs(ref[i] - want[i]) < 1e-5f;
-  std::printf("[%s] 直接按 HOP 喂入的输出和夹具一致（%zu 个样本）\n", ok ? "通过" : "失败", ref.size());
+  std::printf("[%s] output fed in HOP-sized pieces matches the fixture (%zu samples)\n", ok ? "PASS" : "FAIL", ref.size());
 
   struct Case {
     const char* name;
@@ -35,9 +35,9 @@ int main(int argc, char** argv) {
   std::mt19937 rng(1);
   std::vector<int> rnd(997);
   for (auto& v : rnd) v = 1 + int(rng() % 3000);
-  std::vector<Case> cases = {{"块=1", 1, {1}},       {"块=32", 32, {32}},     {"块=64", 64, {64}},       {"块=128", 128, {128}},
-                             {"块=256", 256, {256}}, {"块=480", 480, {480}},  {"块=512", 512, {512}},    {"块=960", 960, {960}},
-                             {"块=1024", 1024, {1024}}, {"块=4800", 4800, {4800}}, {"随机 1…3000", 0, rnd}};
+  std::vector<Case> cases = {{"block=1", 1, {1}},       {"block=32", 32, {32}},     {"block=64", 64, {64}},       {"block=128", 128, {128}},
+                             {"block=256", 256, {256}}, {"block=480", 480, {480}},  {"block=512", 512, {512}},    {"block=960", 960, {960}},
+                             {"block=1024", 1024, {1024}}, {"block=4800", 4800, {4800}}, {"random 1..3000", 0, rnd}};
   for (const auto& c : cases) {
     auto m = std::make_unique<tn::Denoiser>(weights);
     tn::BlockAdapter ad(*m, c.fixed);
@@ -56,8 +56,8 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < ref.size() && lat + i < y.size(); ++i) bad += y[lat + i] != ref[i];
     const bool pass = bad == 0 && ad.underruns() == 0;
     ok &= pass;
-    std::printf("[%s] %-12s 延迟 %4d 样本（%.2f ms），不一致的样本 %zu，underrun %d\n", pass ? "通过" : "失败", c.name, lat, 1e3 * lat / tn::SR, bad, ad.underruns());
+    std::printf("[%s] %-12s latency %4d samples (%.2f ms), mismatching samples %zu, underruns %d\n", pass ? "PASS" : "FAIL", c.name, lat, 1e3 * lat / tn::SR, bad, ad.underruns());
   }
-  std::printf(ok ? "全部通过\n" : "有失败项\n");
+  std::printf(ok ? "all passed\n" : "some checks FAILED\n");
   return ok ? 0 : 1;
 }

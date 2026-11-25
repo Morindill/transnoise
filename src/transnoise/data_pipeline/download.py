@@ -33,7 +33,7 @@ def _probe(url: str) -> int:
     req = urllib.request.Request(url, headers={**HEADERS, "Range": "bytes=0-0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         if r.status != 206:
-            raise OSError("服务器不支持 Range 请求")
+            raise OSError("server does not support Range requests")
         return int(r.headers["Content-Range"].rsplit("/", 1)[1])
 
 
@@ -45,7 +45,7 @@ def _get_range(url: str, fd: int, start: int, end: int, tick, stop: threading.Ev
             req = urllib.request.Request(url, headers={**HEADERS, "Range": f"bytes={pos}-{end}"})
             with urllib.request.urlopen(req, timeout=60) as r:
                 if r.status != 206:  # if the server returned the whole file with 200, the offsets written would be wrong
-                    raise OSError(f"Range 请求返回 {r.status}")
+                    raise OSError(f"Range request returned {r.status}")
                 while b := r.read(BLOCK):
                     if stop.is_set():
                         raise _Stopped
@@ -53,7 +53,7 @@ def _get_range(url: str, fd: int, start: int, end: int, tick, stop: threading.Ev
                     pos += len(b)
                     tick(len(b))
             if pos != end + 1:  # read(amt) just returns empty when the connection drops midway and raises nothing, so only the length reveals it
-                raise OSError("数据不完整")
+                raise OSError("incomplete data")
             return
         except (OSError, http.client.HTTPException):
             if attempt == DL["retries"] - 1:
@@ -64,7 +64,7 @@ def _get_range(url: str, fd: int, start: int, end: int, tick, stop: threading.Ev
 def fetch(url: str, dest: Path, conns: int) -> None:
     size = _probe(url)
     if dest.exists() and dest.stat().st_size == size:
-        print(f"  已完整，跳过: {dest.name}")
+        print(f"  already complete, skipping: {dest.name}")
         return
 
     part = dest.with_name(dest.name + ".part")
@@ -118,7 +118,7 @@ def fetch(url: str, dest: Path, conns: int) -> None:
 
 def _unwrap(outer: Path, inner: Path) -> None:
     """Extract inner.name from the outer zip, writing .part first and then renaming (an interruption never leaves a broken file), then delete the outer archive."""
-    print(f"  解出 {inner.name} …")
+    print(f"  extracting {inner.name} …")
     part = inner.with_name(inner.name + ".part")
     with zipfile.ZipFile(outer) as z, z.open(inner.name) as s, part.open("wb") as o:
         shutil.copyfileobj(s, o, 1 << 24)
@@ -131,14 +131,14 @@ def download(src: Source, conns: int) -> None:
     if not urls and src.raw_name:  # shares the raw archive with another source (e.g. rirs_real uses rirs_simulated's archive)
         urls = next((s.urls for s in SOURCES.values() if s.raw_name == src.raw_name and s.urls), ())
     if not urls:
-        raise SystemExit(f"[{src.name}] 没有下载地址")
+        raise SystemExit(f"[{src.name}] no download URL")
     src.raw_dir.mkdir(parents=True, exist_ok=True)
     failed = []
     for url in urls:
         dest = src.raw_dir / Path(url).name
         inner = src.raw_dir / src.unwrap if src.unwrap else None
         if inner and inner.exists():
-            print(f"[{src.name}] 已完整，跳过: {inner.name}")
+            print(f"[{src.name}] already complete, skipping: {inner.name}")
             continue
         print(f"[{src.name}] {dest.name}")
         try:
@@ -146,7 +146,7 @@ def download(src: Source, conns: int) -> None:
             if inner:
                 _unwrap(dest, inner)
         except Exception as e:
-            print(f"  失败: {e}（重跑同一命令可续传）")
+            print(f"  failed: {e} (re-run the same command to resume)")
             failed.append(url)
     if failed:
-        raise SystemExit(f"[{src.name}] {len(failed)} 个文件失败:\n" + "\n".join(failed))
+        raise SystemExit(f"[{src.name}] {len(failed)} file(s) failed:\n" + "\n".join(failed))

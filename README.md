@@ -2,7 +2,7 @@
 
 Streaming speech denoising, end to end: data pipeline, evaluation, model training (Keras 3 + TensorFlow), a hand-written dependency-free C++ inference core, and a JUCE VST3 plugin.
 
-- **Model**: 48 kHz, STFT 960/480 (20 ms window, 10 ms hop), a causal sliding-window Transformer in the spirit of DeepFilterNet3. It predicts 32 ERB-band gains plus a low-frequency deep filter. Total algorithmic latency is about 20-30 ms.
+- **Model**: 48 kHz, STFT 960/480 (20 ms window, 10 ms hop), a causal Conformer (sliding-window attention plus causal depthwise convolution) in the spirit of DeepFilterNet3. It predicts 32 ERB-band gains plus a low-frequency deep filter. Total algorithmic latency is about 20-30 ms.
 - **Deployment**: the C++ core (`cpp/`, no third-party dependencies) is checked layer by layer against a numpy reference, which in turn is checked against the Keras model.
 - **Plugin**: mono/stereo VST3 with Mix and Bypass parameters, 48 kHz only.
 
@@ -72,7 +72,7 @@ uv run transnoise --help                 # lists data, eval, train, infer, expor
 uv run transnoise check model            # builds the model with random weights and verifies shapes, perfect STFT reconstruction and causality
 ```
 
-`check model` ends with `全部通过` ("all passed") when everything is fine.
+`check model` ends with `all passed` when everything is fine.
 
 ---
 
@@ -175,7 +175,7 @@ uv run transnoise check training    # synthetic data: bandwidth mask, overfit on
 uv run transnoise check batch       # measures peak GPU memory and speed for segment length x batch size, to choose batch_size
 ```
 
-Each prints `[通过]` (pass) or `[失败]` (fail) per item and ends with `全部通过` or `有失败项` (there are failures); the exit code is non-zero on failure.
+Each prints `[PASS]` or `[FAIL]` per item and ends with `all passed` or `some checks FAILED`; the exit code is non-zero on failure.
 
 ---
 
@@ -183,8 +183,9 @@ Each prints `[通过]` (pass) or `[失败]` (fail) per item and ends with `全�
 
 ### 5.1 What gets trained
 
-- **Model** (`configs/model.toml`, the only place where model hyperparameters are defined): STFT 960/480 -> 32 ERB features + low-frequency complex features -> sliding-window causal Transformer -> ERB gains + low-frequency deep filter -> inverse STFT. Low band output (bins below `nb_df`) = deep filter (applied to the noisy spectrum) x ERB gain, which acts as a 0-1 gate; the high band is multiplied by the gain only.
-- **Lookahead**: `lookahead` frames (10 ms each) are used only in the first attention layer and the deep filter; later layers are strictly causal, so the total lookahead does not grow with depth. `df_order` must be greater than `lookahead`. Latency is (lookahead + 1) x 10 ms overall and at most (lookahead + 2) x 10 ms; `lookahead = 0` is fully causal.
+- **Model** (`configs/model.toml`, the only place where model hyperparameters are defined): STFT 960/480 -> 32 ERB features + low-frequency complex features -> causal Conformer blocks -> ERB gains + low-frequency deep filter -> inverse STFT. Low band output (bins below `nb_df`) = deep filter (applied to the noisy spectrum) x ERB gain, which acts as a 0-1 gate; the high band is multiplied by the gain only.
+- **Conformer block** (`n_layers` of them, pre-LN with residuals): half-step feed-forward, sliding-window self-attention with a learned relative position bias (`window` frames back), a convolution module (pointwise, GLU, causal depthwise convolution of `conv_kernel` frames, LayerNorm, Swish, pointwise), half-step feed-forward. There is no BatchNorm and no per-block output norm; one LayerNorm follows the last block.
+- **Lookahead**: `lookahead` frames (10 ms each) are used only in the first layer's attention and the deep filter; later layers and every convolution are strictly causal, so the total lookahead does not grow with depth. `df_order` must be greater than `lookahead`. Latency is (lookahead + 1) x 10 ms overall and at most (lookahead + 2) x 10 ms; `lookahead = 0` is fully causal.
 - **Loss**: multi-resolution spectral loss (FFT 256/512/1024/2048, compression exponent 0.3, a magnitude term and a complex term). Every sample carries a cutoff frequency (the measured bandwidth of its clean speech); bins above it do not count.
 - **Optimizer**: AdamW, linear warmup then cosine decay, global gradient-norm clipping, EMA weights (used for evaluation and export). No weight decay on biases, LayerNorm and the relative position bias.
 - **Data** (`training/dataset.py`, `[data]` in `configs/train.toml`): everything is mixed online, every step draws speech x noise x (RIR) x SNR x level. Sample kinds: `mixed` (speech + noise), `noise_only` (target all zeros), `clean_only` (target = input) and `silence` (all zeros), with fractions `p_noise_only`, `p_clean`, `p_silence` (the rest is `mixed`). Speech is drawn uniformly over files; all noise sources form one pool sampled by file duration; RIRs pick a source first, then a file. Batch number `step` is determined by `(seed, step)` alone, so resuming only needs the step.
@@ -309,7 +310,7 @@ What to expect:
 
 Notes:
 
-- `pack` folds every LayerNorm's gamma and beta into the following linear layer, and writes `config.h`: all shapes in C++ are compile-time constants, and the header of `weights.bin` carries the same constants and is checked item by item on load. **Changing the architecture means retraining, re-packing and recompiling.**
+- `pack` folds the gamma and beta of every LayerNorm that feeds a linear layer into that layer (the LayerNorm inside the convolution module keeps its own), and writes `config.h`: all shapes in C++ are compile-time constants, and the header of `weights.bin` carries the same constants and is checked item by item on load. **Changing the architecture means retraining, re-packing and recompiling.**
 - Latency reported by `BlockAdapter`: for a fixed host block size B it is (LA+1)*HOP + HOP - gcd(B, HOP) samples (960 samples = 20 ms when B is a multiple of 480); for variable block sizes it is (LA+2)*HOP - 1 samples (about 30 ms).
 - `cpp/include/tn/`: `model.h` (`Weights`, `Denoiser`: frame-by-frame inference with a KV cache; the real-time path allocates nothing, takes no locks and throws nothing), `fft.h`, `stream_adapter.h` (`BlockAdapter`: any host block size <-> the model's HOP frames, with a fixed latency), `wav.h`.
 - `src/transnoise/deploy/ref.py` is the numpy streaming reference (numpy only); every C++ layer is checked against it.
@@ -364,7 +365,7 @@ If the weights fail to load, the plugin passes audio through instead of crashing
 
 | File | Controls |
 |---|---|
-| `configs/model.toml` | model structure: STFT sizes, ERB bands, `nb_df`, Transformer width/depth/heads, `window`, `lookahead`, deep-filter `order` |
+| `configs/model.toml` | model structure: STFT sizes, ERB bands, `nb_df`, Conformer width/depth/heads, `ff_mult`, `conv_kernel`, `window`, `lookahead`, deep-filter `order` |
 | `configs/train.toml` | run name and seed, segment length, batch size, loss, optimizer, checkpointing, online-mixing data settings (SNR range, speech level, sample-kind fractions), training loop |
 | `configs/data_pipeline.toml` | download connections/retries, bandwidth tiers, cleaning thresholds, split ratios, staging workers, `.sw` segmenting |
 | `configs/eval.toml` | test sets (counts, SNRs, durations, seeds), metric settings, DNSMOS model path |
@@ -381,7 +382,7 @@ src/transnoise/
   paths.py, mixing.py    data locations; noisy-speech synthesis shared by training and evaluation
   data_pipeline/         download, stage, index
   eval/                  test sets, metrics, scoring, reports
-  model/                 STFT front end, attention, heads, the Denoiser (Keras)
+  model/                 STFT front end, Conformer blocks, heads, the Denoiser (Keras)
   training/              dataset, losses, optimizer, trainer, training loop, inference
   deploy/                export, pack, fixture, numpy streaming reference
 train/                   train-environment project and self-check scripts (check_*.py, measure_batch.py)

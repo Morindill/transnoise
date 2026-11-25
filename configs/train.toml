@@ -1,5 +1,5 @@
 # Training hyperparameters. Used only in the train environment (Keras + TensorFlow). The loss and optimizer follow DFN3's config.ini;
-# the learning-rate values come from DFN3 (a GRU architecture) and were not tuned separately for the Transformer.
+# the learning-rate values come from DFN3 (a GRU architecture) and were not tuned separately for the Conformer.
 
 [run]
 name = "baseline"        # checkpoint directory = data/checkpoints/<name>/
@@ -7,7 +7,7 @@ seed = 0
 
 [batch]
 crop_seconds = 3.0       # training segment length (DFN3 also uses 3 seconds)
-batch_size = 32          # measured (RTX 4070 SUPER, 3 s segments): peak memory 5.7 GB at 199 clips/s; batch 32 is 3.0 GB at 207 clips/s (speed is saturated). See train/measure_batch.py
+batch_size = 32          # measured with the model.toml of the time (RTX 4070 SUPER, 3 s segments, XLA): batch 32 is 1.2 GB at about 800 clips/s, batch 64 is 2.4 GB at about 810 clips/s (speed is saturated). See train/measure_batch.py
 
 [loss]
 gamma = 0.3              # magnitude compression exponent: |X|^gamma
@@ -16,7 +16,7 @@ weight_mag = 500.0       # MSE on the compressed magnitude
 weight_complex = 500.0   # MSE on the compressed complex spectrum (with phase)
 
 [optim]
-peak_lr = 2e-3
+peak_lr = 2.5e-3
 min_lr = 1e-6
 warmup_steps = 2000      # linear warmup to peak_lr, then cosine decay to min_lr
 total_steps = 100000
@@ -37,8 +37,8 @@ snr_min = -5.0           # SNR is drawn uniformly in [snr_min, snr_max] (dB, ove
 snr_max = 40.0
 speech_db_min = -40.0    # overall level of the clean speech (dBFS RMS), drawn uniformly in this range: the model's ERB feature uses a fixed dB offset, so it must have seen all volumes
 speech_db_max = -15.0
-workers = 12             # number of data processes (the machine has 28 logical cores; leave room for the main process and TF threads)
-prefetch = 8             # how many batches to prepare ahead (about 74 MB each)
+workers = 20             # number of data processes (the machine has 28 logical cores; leave room for the main process and TF threads)
+prefetch = 16             # how many batches to prepare ahead (about 74 MB each)
 val_batches = 16         # the validation set is a fixed 16 batches (fixed seed, the same batches at every evaluation)
 
 [loop]                   # training loop (training/run.py)

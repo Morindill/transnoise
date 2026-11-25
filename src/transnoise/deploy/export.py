@@ -38,13 +38,21 @@ def collect(model) -> dict[str, np.ndarray]:
     dense("mix", model.mix)
     for i, b in enumerate(model.blocks):
         p = f"blocks.{i}"
-        norm(f"{p}.ln1", b.ln1)
+        norm(f"{p}.ln_ffa", b.ln_ffa)
+        dense(f"{p}.ffa1", b.ffa1)
+        dense(f"{p}.ffa2", b.ffa2)
+        norm(f"{p}.ln_att", b.ln_att)
         dense(f"{p}.attn.qkv", b.attn.qkv)
         out[f"{p}.attn.rel_bias"] = to_np(b.attn.rel_bias)
         dense(f"{p}.attn.out", b.attn.out)
-        norm(f"{p}.ln2", b.ln2)
-        dense(f"{p}.ff1", b.ff1)
-        dense(f"{p}.ff2", b.ff2)
+        norm(f"{p}.ln_conv", b.ln_conv)
+        dense(f"{p}.pw1", b.pw1)
+        dense(f"{p}.dw", b.dw)
+        norm(f"{p}.dw_ln", b.dw_ln)
+        dense(f"{p}.pw2", b.pw2)
+        norm(f"{p}.ln_ffb", b.ln_ffb)
+        dense(f"{p}.ffb1", b.ffb1)
+        dense(f"{p}.ffb2", b.ffb2)
     norm("norm_out", model.norm_out)
     dense("gain", model.gain_head.fc)
     dense("df", model.df_head.fc)
@@ -68,20 +76,20 @@ def export(ckpt: Path, out_path: Path, ema: bool = True) -> dict:
 
     arrays = collect(model)
     n_params = sum(int(np.prod(a.shape)) for k, a in arrays.items() if not k.endswith(".eps"))
-    assert n_params == sum(int(np.prod(w.shape)) for w in model.weights), "有权重没被导出"
+    assert n_params == sum(int(np.prod(w.shape)) for w in model.weights), "some weights were not exported"
     info = {"config": dataclasses.asdict(cfg), "erb_widths": erb_widths(cfg), "step": meta["step"],
             "ema": ema, "ckpt": str(ckpt), "keras": keras.__version__}
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(out_path, meta=np.array(json.dumps(info)), window=vorbis_window(cfg.fft), **arrays)
-    print(f"{out_path}：{len(arrays)} 个张量，{n_params:,} 个参数（step {meta['step']}，{'EMA' if ema else '原始'}权重）")
+    print(f"{out_path}: {len(arrays)} tensors, {n_params:,} parameters (step {meta['step']}, {'EMA' if ema else 'raw'} weights)")
     return info
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--ckpt", required=True, help="运行目录 / best / step_XXXXXXXX")
-    p.add_argument("--out", help="默认 data/deploy/<运行名>/weights.npz")
-    p.add_argument("--raw", action="store_true", help="用原始权重而不是 EMA 权重")
+    p.add_argument("--ckpt", required=True, help="run directory / best / step_XXXXXXXX")
+    p.add_argument("--out", help="default: data/deploy/<run name>/weights.npz")
+    p.add_argument("--raw", action="store_true", help="use the raw weights instead of the EMA weights")
     a = p.parse_args()
     from ..training.infer import resolve
 

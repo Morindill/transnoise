@@ -18,11 +18,12 @@ class ModelConfig:
     nb_df: int
     erb_db_offset: float
     erb_db_scale: float
-    # transformer
+    # conformer
     d_model: int
     n_layers: int
     n_heads: int
     ff_mult: int
+    conv_kernel: int
     window: int
     lookahead: int
     # deep filter
@@ -46,7 +47,7 @@ class ModelConfig:
     def load(cls, path: Path = ROOT / "configs" / "model.toml") -> "ModelConfig":
         with path.open("rb") as f:
             t = tomllib.load(f)
-        return cls(**t["frontend"], **t["transformer"], df_order=t["deep_filter"]["order"])
+        return cls(**t["frontend"], **t["conformer"], df_order=t["deep_filter"]["order"])
 
     @classmethod
     def from_checkpoint(cls, ckpt: Path) -> "ModelConfig":

@@ -26,7 +26,7 @@ a = p.parse_args()
 
 mcfg = ModelConfig.load()
 total = tf.config.experimental.get_memory_info("GPU:0")  # triggers GPU initialization
-print(f"{'片段(s)':>7} {'batch':>6} {'峰值显存':>9} {'ms/步':>8} {'条/秒':>8}  备注")
+print(f"{'clip(s)':>7} {'batch':>6} {'peak mem':>9} {'ms/step':>8} {'clips/s':>8}  note")
 for crop in a.crops:
     tcfg = replace(TrainConfig.load(), crop_seconds=crop)
     tr = Trainer(Denoiser(mcfg), tcfg)
@@ -46,7 +46,7 @@ for crop in a.crops:
             print(f"{crop:>7.1f} {b:>6} {'OOM':>9}")
             break
         peak = tf.config.experimental.get_memory_info("GPU:0")["peak"] / 2**30
-        note = "超出预算，停止" if peak > a.budget_gb else ""
+        note = "over budget, stopping" if peak > a.budget_gb else ""
         print(f"{crop:>7.1f} {b:>6} {peak:>7.2f}GB {dt * 1000:>8.0f} {b / dt:>8.1f}  {note}")
         if note:
             break

@@ -18,15 +18,15 @@ struct Audio {
 
 inline Audio read(const std::string& path) {
   std::ifstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("打不开 " + path);
+  if (!f) throw std::runtime_error("cannot open " + path);
   auto u32 = [&] { uint32_t v = 0; f.read(reinterpret_cast<char*>(&v), 4); return v; };
   auto u16 = [&] { uint16_t v = 0; f.read(reinterpret_cast<char*>(&v), 2); return v; };
   char tag[4];
   f.read(tag, 4);
-  if (std::memcmp(tag, "RIFF", 4) != 0) throw std::runtime_error(path + "：不是 RIFF/WAV");
+  if (std::memcmp(tag, "RIFF", 4) != 0) throw std::runtime_error(path + ": not a RIFF/WAV file");
   u32();
   f.read(tag, 4);
-  if (std::memcmp(tag, "WAVE", 4) != 0) throw std::runtime_error(path + "：不是 WAVE");
+  if (std::memcmp(tag, "WAVE", 4) != 0) throw std::runtime_error(path + ": not a WAVE file");
   Audio a;
   int fmt = 0, bits = 0;
   while (f.read(tag, 4)) {
@@ -45,7 +45,7 @@ inline Audio read(const std::string& path) {
         f.seekg(size - 16, std::ios::cur);
       }
     } else if (std::memcmp(tag, "data", 4) == 0) {
-      if (!fmt || !bits) throw std::runtime_error(path + "：data 在 fmt 之前");
+      if (!fmt || !bits) throw std::runtime_error(path + ": data chunk before fmt chunk");
       const int bytes = bits / 8;
       const size_t n = size / bytes;
       std::vector<uint8_t> raw(size);
@@ -60,10 +60,10 @@ inline Audio read(const std::string& path) {
           if (bits == 16) v = static_cast<int16_t>(p[0] | (p[1] << 8));
           else if (bits == 24) v = (static_cast<int32_t>(p[0] << 8 | p[1] << 16 | p[2] << 24)) >> 8;
           else if (bits == 32) std::memcpy(&v, p, 4);
-          else throw std::runtime_error(path + "：不支持的位深");
+          else throw std::runtime_error(path + ": unsupported bit depth");
           a.x[i] = static_cast<float>(v) / static_cast<float>(1u << (bits - 1));
         } else {
-          throw std::runtime_error(path + "：不支持的 WAV 格式");
+          throw std::runtime_error(path + ": unsupported WAV format");
         }
       }
       return a;
@@ -71,13 +71,13 @@ inline Audio read(const std::string& path) {
       f.seekg(size + (size & 1), std::ios::cur);
     }
   }
-  throw std::runtime_error(path + "：没有 data 块");
+  throw std::runtime_error(path + ": no data chunk");
 }
 
 // Mono PCM16 (clipped and rounded, matching how soundfile writes PCM_16)
 inline void write_pcm16(const std::string& path, const float* x, size_t n, int sr) {
   std::ofstream f(path, std::ios::binary);
-  if (!f) throw std::runtime_error("打不开 " + path);
+  if (!f) throw std::runtime_error("cannot open " + path);
   auto w32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
   auto w16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
   f.write("RIFF", 4), w32(36 + uint32_t(n) * 2), f.write("WAVEfmt ", 8);

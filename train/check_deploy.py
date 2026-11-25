@@ -20,7 +20,7 @@ def main() -> None:
     from transnoise.deploy.ref import RefStream
     from transnoise.model.config import ModelConfig
     from transnoise.model.denoiser import Denoiser
-    from transnoise.paths import DATA, EVAL, ROOT
+    from transnoise.paths import DATA, EVAL, ROOT, SR
     from transnoise.training import checkpoint
     from transnoise.training.infer import resolve
     from transnoise.training.trainer import setup_gpu
@@ -30,7 +30,7 @@ def main() -> None:
     def check(name: str, cond: bool, detail: str = "") -> None:
         nonlocal ok
         ok &= bool(cond)
-        print(f"[{'通过' if cond else '失败'}] {name} {detail}")
+        print(f"[{'PASS' if cond else 'FAIL'}] {name} {detail}")
 
     import tensorflow as tf
 
@@ -42,7 +42,7 @@ def main() -> None:
     cfg_d = info["config"]
 
     model = Denoiser(ModelConfig.from_checkpoint(ckpt))
-    model(np.zeros((1, 48000), "float32"))
+    model(np.zeros((1, SR), "float32"))
     checkpoint.load_weights(ckpt, model, ema=True)
 
     files = sorted((EVAL / "testsets" / "noise" / "noisy").glob("*.wav"))[:: max(1, 600 // a.clips)][: a.clips]
@@ -64,24 +64,24 @@ def main() -> None:
         err = np.abs(y_str - y_off[:L])
         rel = float(np.sqrt(np.mean((y_str - y_off[:L]) ** 2) / np.mean(y_off[:L] ** 2)))
         worst_rel, worst_abs = max(worst_rel, rel), max(worst_abs, float(err.max()))
-        print(f"  {f.name}: 最大绝对误差 {err.max():.2e}，相对 RMS 误差 {rel:.2e}（numpy 参考 {dt / (len(x) / hop) * 1e3:.2f} ms/帧，仅供参考）")
+        print(f"  {f.name}: max absolute error {err.max():.2e}, relative RMS error {rel:.2e} (numpy reference {dt / (len(x) / hop) * 1e3:.2f} ms/frame; for reference only)")
         if f == files[0]:
             ctrl = {k: weights[k] for k in weights.files}
             ctrl["blocks.0.attn.rel_bias"] = ctrl["blocks.0.attn.rel_bias"][:, ::-1].copy()  # negative control: reverse the bias table
             y_bad = RefStream(ctrl).process(x)
             rel_bad = float(np.sqrt(np.mean((y_bad - y_off[:L]) ** 2) / np.mean(y_off[:L] ** 2)))
-    check("numpy 流式 = Keras 离线（相对 RMS 误差 < 1e-4）", worst_rel < 1e-4, f"最差 {worst_rel:.2e}，最大绝对误差 {worst_abs:.2e}")
-    check("负对照：改坏一张偏置表后误差明显变大（≥ 100 倍）", rel_bad > 100 * max(worst_rel, 1e-7), f"{rel_bad:.2e}")
+    check("numpy streaming = Keras offline (relative RMS error < 1e-4)", worst_rel < 1e-4, f"worst {worst_rel:.2e}, max absolute error {worst_abs:.2e}")
+    check("negative control: corrupting one bias table makes the error clearly larger (>= 100x)", rel_bad > 100 * max(worst_rel, 1e-7), f"{rel_bad:.2e}")
 
     # Start of the sequence: the first frames have no full history, the easiest place to get wrong
     ref = RefStream(weights)
     x = np.random.default_rng(0).standard_normal(hop * 12).astype("float32") * 0.1
     y_off = np.asarray(model(x[None]))[0]
     y_str = ref.process(x)
-    check("很短的输入（12 帧，窗口还没填满）也一致", np.abs(y_str - y_off[: len(y_str)]).max() < 1e-4 * max(1.0, np.abs(y_off).max()),
-          f"最大绝对误差 {np.abs(y_str - y_off[: len(y_str)]).max():.2e}")
+    check("very short input (12 frames, window not yet full) also matches", np.abs(y_str - y_off[: len(y_str)]).max() < 1e-4 * max(1.0, np.abs(y_off).max()),
+          f"max absolute error {np.abs(y_str - y_off[: len(y_str)]).max():.2e}")
 
-    print("\n全部通过" if ok else "\n有失败项")
+    print("\nall passed" if ok else "\nsome checks FAILED")
     raise SystemExit(0 if ok else 1)
 
 

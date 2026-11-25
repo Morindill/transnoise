@@ -1,5 +1,5 @@
-# Model hyperparameters (streaming denoising: STFT domain + causal Transformer encoder). Used only in the train environment (Keras + TensorFlow).
-# The structure follows DeepFilterNet3 (ERB gains + low-frequency deep filtering), with a sliding-window Transformer replacing the GRU as the temporal module.
+# Model hyperparameters (streaming denoising: STFT domain + causal Conformer encoder). Used only in the train environment (Keras + TensorFlow).
+# The structure follows DeepFilterNet3 (ERB gains + low-frequency deep filtering), with causal Conformer blocks (macaron feed-forward, sliding-window attention, depthwise convolution) replacing the GRU as the temporal module.
 
 [frontend]
 sr = 48000
@@ -11,14 +11,15 @@ nb_df = 192              # number of lowest bins the deep filter acts on (192 x 
 erb_db_offset = 60.0    # ERB feature = (10*log10(power) + offset) / scale, a fixed affine map independent of history (streaming friendly)
 erb_db_scale = 40.0
 
-[transformer]
+[conformer]
 d_model = 192
 n_layers = 3
 n_heads = 4
-ff_mult = 2             # feed-forward width = d_model x ff_mult
+ff_mult = 2             # width of each of the two feed-forward modules in a block = d_model x ff_mult
+conv_kernel = 15        # taps of the causal depthwise convolution (the current frame + 14 past frames = 150 ms); adds history, never lookahead
 window = 100            # how many frames each frame looks back (100 frames = 1 second)
-lookahead = 1           # how many frames each frame looks ahead (10 ms each). Used only in the first attention layer and the deep filter;
-                        # later layers are strictly causal, so this is the total lookahead and does not accumulate with depth. 0 = fully causal (RNNoise class)
+lookahead = 1           # how many frames each frame looks ahead (10 ms each). Used only in the first layer's attention and the deep filter;
+                        # later layers and all convolutions are strictly causal, so this is the total lookahead and does not accumulate with depth. 0 = fully causal; 1 = the same lookahead as RNNoise
 
 [deep_filter]
 order = 7               # filter order (number of frames used); must be greater than lookahead; the lookahead is the one set above

@@ -46,7 +46,7 @@ class Index:
         # RIRs are grouped by source: pick a source uniformly, then a file (file counts differ wildly across sources; drawing by file would be swamped by the big one)
         self.rir = [np.array([r["path"] for r in rows if r["role"] == "rir" and r["source"] == s], dtype="S")
                     for s in sorted({r["source"] for r in rows if r["role"] == "rir"})]
-        assert len(speech) and len(noise) and self.rir, f"{split}: 缺语音/噪声/RIR"
+        assert len(speech) and len(noise) and self.rir, f"{split}: missing speech/noise/RIR"
 
 
 class BatchSource:

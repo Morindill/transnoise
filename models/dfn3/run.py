@@ -24,4 +24,4 @@ for i in range(0, len(files), CHUNK):
     subprocess.run(cmd + [str(f) for f in files[i: i + CHUNK]], check=True, capture_output=True)
 el = time.perf_counter() - t
 audio = sum((lambda w: w.getnframes() / w.getframerate())(wave.open(str(f))) for f in files)
-print(f"DeepFilterNet3: {len(files)} 个文件，音频 {audio:.0f}s，耗时 {el:.1f}s，RTF≈{el / audio:.3f}（含进程启动与读写，仅供参考）")
+print(f"DeepFilterNet3: {len(files)} files, audio {audio:.0f}s, took {el:.1f}s, RTF≈{el / audio:.3f} (includes process start-up and I/O; for reference only)")

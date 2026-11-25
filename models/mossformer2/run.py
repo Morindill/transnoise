@@ -30,5 +30,5 @@ for f in files:
     total += time.perf_counter() - t
     sf.write(Path(a.out) / f.name, np.clip(y.reshape(-1), -1, 1), 48000, subtype="PCM_16")
     audio += sf.info(f).duration
-print(f"MossFormer2_SE_48K: {len(files)} 个文件，音频 {audio:.0f}s，处理 {total:.1f}s，RTF≈{total / audio:.3f}"
-      f"（{'GPU' if torch.cuda.is_available() else 'CPU'}，不含加载和预热，仅供参考）")
+print(f"MossFormer2_SE_48K: {len(files)} files, audio {audio:.0f}s, processed in {total:.1f}s, RTF≈{total / audio:.3f}"
+      f" ({'GPU' if torch.cuda.is_available() else 'CPU'}, excluding loading and warm-up; for reference only)")

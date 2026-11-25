@@ -61,7 +61,7 @@ def _dnsmos_session():
             str(ROOT / CFG["assets"]["dnsmos_p835"]), providers=["CUDAExecutionProvider", "CPUExecutionProvider"]
         )
         if _sess.get_providers()[0] != "CUDAExecutionProvider":  # onnxruntime silently falls back to CPU when the libraries are missing; say so
-            print("警告：DNSMOS 没有用上 GPU，退回 CPU（会慢很多）")
+            print("warning: DNSMOS is not using the GPU, falling back to CPU (much slower)")
     return _sess
 
 

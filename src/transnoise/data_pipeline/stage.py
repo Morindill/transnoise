@@ -117,7 +117,7 @@ def _tasks(src: Source, unit: Path, done: set[str], on_pos: Callable[[int], None
             if meta:  # upstream gives each file's split and group (location): use it directly; a missing entry is an error, never a silent fallback to hashing
                 name = member.rsplit("/", 1)[-1]
                 if name not in meta:
-                    raise SystemExit(f"[{src.name}] {member} 不在 {src.meta_csv} 里，没法确定它的切分")
+                    raise SystemExit(f"[{src.name}] {member} is not in {src.meta_csv}, cannot determine its split")
                 t["split"], t["speaker"] = meta[name]
             if src.channel is not None:
                 yield from _segments(src, t, read(), done)
@@ -132,7 +132,7 @@ def stage(src: Source, workers: int | None = None, redo: bool = False) -> None:
     Resumable: the manifest records processed entries; <source>.units.json records archives that were fully processed, which are skipped entirely.
     """
     if not src.raw_dir.is_dir():
-        raise SystemExit(f"[{src.name}] {src.raw_dir} 不存在，先 download")
+        raise SystemExit(f"[{src.name}] {src.raw_dir} does not exist; run download first")
     MANIFESTS.mkdir(parents=True, exist_ok=True)
     mf, uf = MANIFESTS / f"{src.name}.jsonl", MANIFESTS / f"{src.name}.units.json"
     if redo:
@@ -142,16 +142,16 @@ def stage(src: Source, workers: int | None = None, redo: bool = False) -> None:
 
     all_units = sorted(src.raw_dir.glob("*.sw")) if src.kind == "raw" else archives_in(src.raw_dir)
     if not all_units:
-        raise SystemExit(f"[{src.name}] {src.raw_dir} 里没有可处理的文件")
+        raise SystemExit(f"[{src.name}] no files to process in {src.raw_dir}")
     units_done: dict[str, int] = json.loads(uf.read_text()) if uf.exists() else {}
     units = [u for u in all_units if units_done.get(u.name) != u.stat().st_size]
     if not units:
-        print(f"[{src.name}] 已完成，跳过（{len(all_units)} 个包）")
+        print(f"[{src.name}] already done, skipping ({len(all_units)} packages)")
         return
 
     done = _load_done(mf)
     if done or len(units) < len(all_units):
-        print(f"[{src.name}] 续跑：已有 {len(done)} 条，剩 {len(units)}/{len(all_units)} 个包")
+        print(f"[{src.name}] resuming: {len(done)} rows done, {len(units)}/{len(all_units)} packages left")
     workers = workers or STAGE["workers"] or max(1, min(16, (os.cpu_count() or 4) - 2))
 
     lock = threading.Lock()  # callbacks run in the process pool's management thread and must be mutually exclusive with the main thread
@@ -164,7 +164,7 @@ def stage(src: Source, workers: int | None = None, redo: bool = False) -> None:
     bar = Bar(src.name, sum(u.stat().st_size for u in units))
 
     def progress(final: bool = False) -> None:  # call with the lock held
-        bar.update(stats["pos"], f"  {stats['n']} 条 保留 {stats['kept']}", final)
+        bar.update(stats["pos"], f"  {stats['n']} rows, kept {stats['kept']}", final)
 
     def set_pos(unit: Path, p: int) -> None:
         with lock:
@@ -221,4 +221,4 @@ def stage(src: Source, workers: int | None = None, redo: bool = False) -> None:
         raise errors[0]
     with lock:
         progress(final=True)
-    print(f"[{src.name}] 完成：新增 {stats['n']} 条，保留 {stats['kept']}（此前已有 {len(done)}）")
+    print(f"[{src.name}] done: added {stats['n']} rows, kept {stats['kept']} ({len(done)} existed before)")

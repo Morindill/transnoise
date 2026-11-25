@@ -53,12 +53,12 @@ def latest(run_dir: Path) -> Path | None:
 def load(path: Path, model, optimizer, ema) -> dict:
     """Write the state in path back into the already-built model, optimizer and EMA variables; returns meta (including step and extra)."""
     meta = json.loads((path / "meta.json").read_text())
-    for label, vars_, shapes, file in (("模型", model.weights, meta["model_shapes"], "model.npz"),
-                                       ("优化器", optimizer.variables, meta["optim_shapes"], "optim.npz"),
+    for label, vars_, shapes, file in (("model", model.weights, meta["model_shapes"], "model.npz"),
+                                       ("optimizer", optimizer.variables, meta["optim_shapes"], "optim.npz"),
                                        ("EMA", ema, meta["model_shapes"], "ema.npz")):
         have = [list(v.shape) for v in vars_]
         if have != shapes:
-            raise ValueError(f"{path}：{label}的变量和检查点对不上（{len(have)} 个 vs 存档 {len(shapes)} 个），结构或配置改过？")
+            raise ValueError(f"{path}: {label} variables do not match the checkpoint ({len(have)} vs {len(shapes)} stored); was the structure or config changed?")
         with np.load(path / file) as z:
             for i, v in enumerate(vars_):
                 v.assign(z[f"v{i}"])
@@ -70,7 +70,7 @@ def load_weights(path: Path, model, ema: bool = True) -> dict:
     meta = json.loads((path / "meta.json").read_text())
     have = [list(w.shape) for w in model.weights]
     if have != meta["model_shapes"]:
-        raise ValueError(f"{path}：模型结构和检查点对不上（{len(have)} 个权重 vs 存档 {len(meta['model_shapes'])} 个），model.toml 改过？")
+        raise ValueError(f"{path}: model structure does not match the checkpoint ({len(have)} weights vs {len(meta['model_shapes'])} stored); was model.toml changed?")
     with np.load(path / ("ema.npz" if ema else "model.npz")) as z:
         for i, w in enumerate(model.weights):
             w.assign(z[f"v{i}"])

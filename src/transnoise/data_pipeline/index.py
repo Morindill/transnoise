@@ -29,7 +29,7 @@ def build_index() -> None:
     for s in SPLITS:
         tmp[s].replace(INDEX / f"{s}.jsonl")
 
-    print(f"{'split':<7}{'role':<8}{'lang':<7}{'条数':>9}{'小时':>9}")
+    print(f"{'split':<7}{'role':<8}{'lang':<7}{'count':>9}{'hours':>9}")
     for key in sorted(count, key=lambda k: (SPLITS.index(k[0]), k[1], k[2])):
         print(f"{key[0]:<7}{key[1]:<8}{key[2]:<7}{count[key]:>9}{hours[key]:>9.1f}")
-    print(f"索引写入 {INDEX}")
+    print(f"index written to {INDEX}")

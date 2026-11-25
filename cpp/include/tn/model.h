@@ -1,5 +1,5 @@
 // C++ implementation of the streaming denoising model: all shapes come from config.h (compile-time constants), the weights from weights.bin (validated on load).
-// Frame-by-frame processing (HOP samples at a time) with a KV cache; the real-time path (push) does not allocate memory, take locks or throw exceptions.
+// Frame-by-frame processing (HOP samples at a time) with a KV cache and a convolution history per layer; the real-time path (push) does not allocate memory, take locks or throw exceptions.
 // Numerically it corresponds one-to-one to the numpy reference (transnoise/deploy/ref.py); see there for the algorithm description.
 #pragma once
 #include <algorithm>
@@ -24,8 +24,10 @@ class Weights {
     const float *w, *b;
   };
   struct Block {
-    Lin qkv, out, ff1, ff2;
-    const float* rel;  // [HEADS][WINDOW + la_i + 1]
+    Lin ffa1, ffa2, qkv, out, pw1, pw2, ffb1, ffb2;
+    const float* rel;                // [HEADS][WINDOW + la_i + 1]
+    const float *dw_w, *dw_b;        // depthwise convolution: [CK][D] taps (tap k multiplies the frame CK-1-k steps back), [D] bias
+    const float *dwln_g, *dwln_b;    // [D] gamma and beta of the LayerNorm after the depthwise convolution
   };
 
   Lin erb_in, spec_in, mix, gain, df;
@@ -34,17 +36,17 @@ class Weights {
   // Construct from the contents of weights.bin (copied into 64-byte aligned internal storage). Throws on a shape/constant/name mismatch (at load time only).
   Weights(const uint8_t* data, size_t size) {
     constexpr size_t kHead = 8 + 8;
-    if (size < kHead || std::memcmp(data, "TNWEIGHT", 8) != 0) throw std::runtime_error("weights.bin：魔数不对");
+    if (size < kHead || std::memcmp(data, "TNWEIGHT", 8) != 0) throw std::runtime_error("weights.bin: bad magic number");
     uint32_t n_const, n_tensors;
     std::memcpy(&n_const, data + 8, 4);
     std::memcpy(&n_tensors, data + 12, 4);
     constexpr size_t n_expect = sizeof(CONSTS) / sizeof(CONSTS[0]);
-    if (n_const != n_expect) throw std::runtime_error("weights.bin：常量个数不对");
+    if (n_const != n_expect) throw std::runtime_error("weights.bin: wrong number of constants");
     const uint8_t* p = data + kHead;
     for (size_t i = 0; i < n_expect; ++i) {
       int32_t v;
       std::memcpy(&v, p + 4 * i, 4);
-      if (v != CONSTS[i]) throw std::runtime_error("weights.bin：第 " + std::to_string(i) + " 个模型常量和编译进来的 config.h 不一致，要重新 pack 并重新编译");
+      if (v != CONSTS[i]) throw std::runtime_error("weights.bin: model constant #" + std::to_string(i) + " differs from the compiled-in config.h; re-pack and recompile");
     }
     p += 4 * n_const;
     struct Entry {
@@ -61,17 +63,17 @@ class Weights {
     }
     size_t data_off = static_cast<size_t>(p - data);
     data_off += (64 - data_off % 64) % 64;
-    if (size != data_off + total * 4) throw std::runtime_error("weights.bin：大小不对");
+    if (size != data_off + total * 4) throw std::runtime_error("weights.bin: wrong size");
     store_ = static_cast<float*>(::operator new(((total * 4 + 63) / 64) * 64, std::align_val_t(64)));  // std::aligned_alloc is not available on MSVC
     std::memcpy(store_, data + data_off, total * 4);
 
     auto take = [&](const std::string& name, size_t count) -> const float* {
       for (uint32_t i = 0; i < n_tensors; ++i)
         if (table[i].name == name) {
-          if (table[i].count != count) throw std::runtime_error("weights.bin：" + name + " 的元素个数不对");
+          if (table[i].count != count) throw std::runtime_error("weights.bin: wrong element count for " + name);
           return store_ + table[i].off;
         }
-      throw std::runtime_error("weights.bin：缺少 " + name);
+      throw std::runtime_error("weights.bin: missing " + name);
     };
     auto lin = [&](const std::string& n, int in, int out) { return Lin{take(n + ".w", size_t(in) * out), take(n + ".b", out)}; };
     erb_in = lin("erb_in", NB_ERB, D);
@@ -79,11 +81,19 @@ class Weights {
     mix = lin("mix", 2 * D, D);
     for (int i = 0; i < LAYERS; ++i) {
       const std::string b = "b" + std::to_string(i);
+      blk[i].ffa1 = lin(b + ".ffa1", D, FF);
+      blk[i].ffa2 = lin(b + ".ffa2", FF, D);
       blk[i].qkv = lin(b + ".qkv", D, 3 * D);
       blk[i].rel = take(b + ".rel", size_t(HEADS) * (WINDOW + (i == 0 ? LA : 0) + 1));
       blk[i].out = lin(b + ".out", D, D);
-      blk[i].ff1 = lin(b + ".ff1", D, FF);
-      blk[i].ff2 = lin(b + ".ff2", FF, D);
+      blk[i].pw1 = lin(b + ".pw1", D, 2 * D);
+      blk[i].dw_w = take(b + ".dw.w", size_t(CK) * D);
+      blk[i].dw_b = take(b + ".dw.b", D);
+      blk[i].dwln_g = take(b + ".dwln.g", D);
+      blk[i].dwln_b = take(b + ".dwln.b", D);
+      blk[i].pw2 = lin(b + ".pw2", D, D);
+      blk[i].ffb1 = lin(b + ".ffb1", D, FF);
+      blk[i].ffb2 = lin(b + ".ffb2", FF, D);
     }
     gain = lin("gain", D, NB_ERB);
     df = lin("df", D, NB_DF * ORDER * 2);
@@ -120,6 +130,8 @@ inline void linear(const float* __restrict x, const Weights::Lin& l, float* __re
 
 inline float gelu(float x) { return 0.5f * x * (1.0f + std::erf(x / 1.41421356237f)); }
 
+inline float silu(float x) { return x / (1.0f + std::exp(-x)); }
+
 // Normalization only (gamma and beta are already folded into the following linear layer)
 inline void ln_norm(const float* x, float* y) {
   float mean = 0.f;
@@ -135,17 +147,24 @@ inline void ln_norm(const float* x, float* y) {
   for (int i = 0; i < D; ++i) y[i] = (x[i] - mean) * inv;
 }
 
+// Normalization with gamma and beta, for the LayerNorm that cannot be folded into a linear layer
+inline void ln_affine(const float* x, const float* gamma, const float* beta, float* y) {
+  ln_norm(x, y);
+  for (int i = 0; i < D; ++i) y[i] = y[i] * gamma[i] + beta[i];
+}
+
 }  // namespace kern
 
 // ---------------------------------------------------------------- streaming denoiser (mono; one instance = all the state of one audio stream)
 struct Trace {  // for cross-checking: filled once per output frame
-  float emb[D], layer[LAYERS][D], xn[D], gains[NB_ERB], coefs[NB_DF * ORDER * 2], re[BINS], im[BINS];
+  float pre[D], layer[LAYERS][D], xn[D], gains[NB_ERB], coefs[NB_DF * ORDER * 2], re[BINS], im[BINS];
 };
 
 class Denoiser {
  public:
   static_assert(FFT == 2 * HOP, "the implementation assumes fft == 2*hop");
   static_assert(ORDER > LA, "df_order must be > lookahead");
+  static_assert(CK >= 1, "conv_kernel must be >= 1");
 
   explicit Denoiser(const Weights& w) : w_(w) {
     for (int k = 0; k < FFT; ++k) win_[k] = static_cast<float>(std::sin(kPi / 2 * std::pow(std::sin(kPi * (k + 0.5) / FFT), 2)));
@@ -159,7 +178,8 @@ class Denoiser {
     std::memset(hist_im_, 0, sizeof hist_im_);
     std::memset(k_, 0, sizeof k_);
     std::memset(v_, 0, sizeof v_);
-    for (int i = 0; i < LAYERS; ++i) kn_[i] = 0;
+    std::memset(cv_, 0, sizeof cv_);
+    for (int i = 0; i < LAYERS; ++i) kn_[i] = cn_[i] = 0;
     hist_head_ = 0;
     pend_head_ = pend_n_ = 0;
     t_ = -1;
@@ -183,9 +203,10 @@ class Denoiser {
     for (int k = 0; k < BINS; ++k) hre[k] = spec[k].re, him[k] = spec[k].im;
     ++t_;
 
-    // --- features -> embedding -> layer 0's QKV (K/V go into the cache, the embedding and Q into the pending queue)
+    // --- features -> embedding -> layer 0's first feed-forward half-step and QKV (K/V go into the cache, x and Q into the pending queue)
     float emb[D], q[D];
     embed(hre, him, emb);
+    ffn(w_.blk[0].ffa1, w_.blk[0].ffa2, emb);
     qkv(0, emb, q);
     const int slot = (pend_head_ + pend_n_) % (LA + 1);
     std::memcpy(pend_x_[slot], emb, sizeof emb);
@@ -199,13 +220,14 @@ class Denoiser {
     std::memcpy(q, pend_q_[pend_head_], sizeof q);
     pend_head_ = (pend_head_ + 1) % (LA + 1);
     --pend_n_;
-    if (trace) std::memcpy(trace->emb, x, sizeof x);
+    if (trace) std::memcpy(trace->pre, x, sizeof x);
 
-    attend(0, x, q, u);
+    finish(0, x, q, u);
     if (trace) std::memcpy(trace->layer[0], x, sizeof x);
     for (int i = 1; i < LAYERS; ++i) {
+      ffn(w_.blk[i].ffa1, w_.blk[i].ffa2, x);
       qkv(i, x, q);
-      attend(i, x, q, u);
+      finish(i, x, q, u);
       if (trace) std::memcpy(trace->layer[i], x, sizeof x);
     }
 
@@ -304,7 +326,17 @@ class Denoiser {
     ++kn_[i];
   }
 
-  // Layer i's attention + feed-forward for frame u, updating x in place.
+  // Half-step feed-forward module: x += 0.5 * FFN(LN(x)) (the LN affine is folded into l1).
+  void ffn(const Weights::Lin& l1, const Weights::Lin& l2, float* x) {
+    float xn[D], f1[FF], f2[D];
+    kern::ln_norm(x, xn);
+    kern::linear<D, FF>(xn, l1, f1);
+    for (int j = 0; j < FF; ++j) f1[j] = kern::silu(f1[j]);
+    kern::linear<FF, D>(f1, l2, f2);
+    for (int d = 0; d < D; ++d) x[d] += 0.5f * f2[d];
+  }
+
+  // Layer i's attention for frame u, updating x in place.
   void attend(int i, float* x, const float* q, int u) {
     const int la = i == 0 ? LA : 0;
     const int m = std::min(u, WINDOW) + la + 1;  // keys that exist: frames u-min(u,W) ... u+la
@@ -342,12 +374,36 @@ class Denoiser {
     float o[D];
     kern::linear<D, D>(ctx, w_.blk[i].out, o);
     for (int d = 0; d < D; ++d) x[d] += o[d];
-    float xn[D], f1[FF], f2[D];
+  }
+
+  // Layer i's convolution module for the next frame, updating x in place: pointwise, GLU, causal depthwise convolution over the last CK GLU outputs, LN, Swish, pointwise.
+  void conv(int i, float* x) {
+    const Weights::Block& b = w_.blk[i];
+    float xn[D], h[2 * D];
     kern::ln_norm(x, xn);
-    kern::linear<D, FF>(xn, w_.blk[i].ff1, f1);
-    for (int j = 0; j < FF; ++j) f1[j] = kern::gelu(f1[j]);
-    kern::linear<FF, D>(f1, w_.blk[i].ff2, f2);
-    for (int d = 0; d < D; ++d) x[d] += f2[d];
+    kern::linear<D, 2 * D>(xn, b.pw1, h);
+    float* newest = cv_[i][cn_[i] % CK];
+    for (int d = 0; d < D; ++d) newest[d] = h[d] / (1.0f + std::exp(-h[D + d]));  // GLU
+    ++cn_[i];
+    float y[D];
+    std::memcpy(y, b.dw_b, sizeof y);
+    int slot = static_cast<int>(cn_[i] % CK);  // the oldest of the last CK frames; before frame 0 the rows are still zero
+    for (int k = 0; k < CK; ++k, slot = slot + 1 == CK ? 0 : slot + 1) {
+      const float* row = cv_[i][slot];
+      const float* tap = b.dw_w + size_t(k) * D;
+      for (int d = 0; d < D; ++d) y[d] += tap[d] * row[d];
+    }
+    kern::ln_affine(y, b.dwln_g, b.dwln_b, xn);
+    for (int d = 0; d < D; ++d) xn[d] = kern::silu(xn[d]);
+    kern::linear<D, D>(xn, b.pw2, y);
+    for (int d = 0; d < D; ++d) x[d] += y[d];
+  }
+
+  // Everything of layer i that follows the QKV projection, for frame u.
+  void finish(int i, float* x, const float* q, int u) {
+    attend(i, x, q, u);
+    conv(i, x);
+    ffn(w_.blk[i].ffb1, w_.blk[i].ffb2, x);
   }
 
   const Weights& w_;
@@ -357,7 +413,8 @@ class Denoiser {
   float hist_re_[ORDER][BINS], hist_im_[ORDER][BINS];
   int hist_head_;
   alignas(64) float k_[LAYERS][CAP][D], v_[LAYERS][CAP][D];
-  int64_t kn_[LAYERS];  // long is only 32 bits on Windows, so use int64_t
+  alignas(64) float cv_[LAYERS][CK][D];  // the last CK GLU outputs of each layer's convolution module (ring buffer)
+  int64_t kn_[LAYERS], cn_[LAYERS];  // long is only 32 bits on Windows, so use int64_t
   alignas(64) float pend_x_[LA + 1][D], pend_q_[LA + 1][D];
   int pend_head_, pend_n_;
   int64_t t_;

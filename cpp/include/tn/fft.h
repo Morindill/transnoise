@@ -30,7 +30,7 @@ class Fft {
         n /= r;
       }
     }
-    if (n != 1) throw std::runtime_error("FFT 长度只支持 2/3/5 的因子");
+    if (n != 1) throw std::runtime_error("FFT length may only have factors 2, 3 and 5");
   }
 
   // out = DFT(in); in and out must not overlap

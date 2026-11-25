@@ -35,7 +35,7 @@ def deep_filter(re, im, coefs, order: int, lookahead: int):
     re/im: [B, F, nb_df] (the lowest nb_df bins of the noisy spectrum); coefs: [B, F, nb_df, order, 2]; missing frames count as 0."""
     f = ops.shape(re)[1]
     left, right = order - 1 - lookahead, lookahead
-    assert left >= 0, "df_order 必须 > lookahead"
+    assert left >= 0, "df_order must be > lookahead"
     pad = [[0, 0], [left, right], [0, 0]]
     pr, pi = ops.pad(re, pad), ops.pad(im, pad)
     out_r = out_i = 0.0
